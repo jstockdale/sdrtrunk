@@ -23,8 +23,9 @@ import io.github.dsheirer.alias.AliasList;
 import io.github.dsheirer.dsp.filter.FilterFactory;
 import io.github.dsheirer.dsp.filter.fir.FIRFilterSpecification;
 import io.github.dsheirer.dsp.filter.fir.real.IRealFilter;
-import io.github.dsheirer.dsp.psk.dqpsk.DQPSKDemodulator;
-import io.github.dsheirer.dsp.psk.dqpsk.DQPSKDemodulatorFactory;
+import io.github.dsheirer.dsp.filter.fir.real.RealFIRFilter;
+import io.github.dsheirer.dsp.psk.demod.DifferentialDemodulator;
+import io.github.dsheirer.dsp.psk.demod.DifferentialDemodulatorFactory;
 import io.github.dsheirer.dsp.squelch.PowerMonitor;
 import io.github.dsheirer.message.IMessage;
 import io.github.dsheirer.message.SyncLossMessage;
@@ -38,6 +39,7 @@ import io.github.dsheirer.module.decode.dmr.message.data.lc.shorty.ShortLCMessag
 import io.github.dsheirer.module.decode.dmr.message.data.terminator.Terminator;
 import io.github.dsheirer.module.decode.p25.audio.P25P1AudioModule;
 import io.github.dsheirer.module.decode.p25.phase1.DecodeConfigP25Phase1;
+import io.github.dsheirer.module.decode.p25.phase1.Modulation;
 import io.github.dsheirer.module.decode.p25.phase1.P25P1MessageProcessor;
 import io.github.dsheirer.module.decode.p25.phase1.message.P25P1Message;
 import io.github.dsheirer.preference.UserPreferences;
@@ -66,12 +68,14 @@ public class P25P1Decoder extends Decoder implements IByteBufferProvider, ICompl
     private static final DecimalFormat DECIMAL_FORMAT = new DecimalFormat("#.##");
     private static final int SYMBOL_RATE = 4800;
     private static final Map<Double,float[]> BASEBAND_FILTERS = new HashMap<>();
-    private DQPSKDemodulator mDemodulator;
+    private DifferentialDemodulator mDemodulator;
     private P25P1SoftMessageFramer mMessageFramer = new P25P1SoftMessageFramer();
-    private P25P1SoftSymbolProcessor mSymbolProcessor = new P25P1SoftSymbolProcessor(mMessageFramer);
+    private P25P1SoftSymbolProcessor mSymbolProcessor;
     private P25P1MessageProcessor mMessageProcessor = new P25P1MessageProcessor();
     private IRealFilter mIBasebandFilter;
     private IRealFilter mQBasebandFilter;
+    private RealFIRFilter mRRCFilterI;
+    private RealFIRFilter mRRCFilterQ;
     private PowerMonitor mPowerMonitor = new PowerMonitor();
 
     @Override
@@ -83,7 +87,7 @@ public class P25P1Decoder extends Decoder implements IByteBufferProvider, ICompl
     public P25P1Decoder(DecodeConfigP25Phase1 config)
     {
         mMessageProcessor.setMessageListener(getMessageListener());
-    }
+        mSymbolProcessor = new P25P1SoftSymbolProcessor(mMessageFramer, config.getModulation());    }
 
     /**
      * Sets the sample rate and configures internal decoder components.
@@ -101,10 +105,25 @@ public class P25P1Decoder extends Decoder implements IByteBufferProvider, ICompl
         mPowerMonitor.setSampleRate((int)sampleRate);
         mIBasebandFilter = FilterFactory.getRealFilter(getBasebandFilter(sampleRate));
         mQBasebandFilter = FilterFactory.getRealFilter(getBasebandFilter(sampleRate));
-        mDemodulator = DQPSKDemodulatorFactory.getDemodulator(sampleRate, SYMBOL_RATE);
+        mDemodulator = DifferentialDemodulatorFactory.getDemodulator(sampleRate, SYMBOL_RATE);
         mSymbolProcessor.setSamplesPerSymbol(mDemodulator.getSamplesPerSymbol());
         mMessageFramer.setListener(mMessageProcessor);
         mMessageProcessor.setMessageListener(getMessageListener());
+
+        float decimation = 1;
+        float decimatedSampleRate = (float)sampleRate / decimation;
+        float rrcAlpha = Math.abs((float)(5760.0 / decimatedSampleRate));
+        int symbolLength = (int)Math.floor((-44 * rrcAlpha) + 33);
+        symbolLength += symbolLength % 2; //Make the symbol length even
+
+        if(symbolLength < 0)
+        {
+            symbolLength = 2;
+        }
+
+        float[] taps = FilterFactory.getRootRaisedCosine(decimatedSampleRate / SYMBOL_RATE, symbolLength, rrcAlpha);
+        mRRCFilterI = new RealFIRFilter(taps);
+        mRRCFilterQ = new RealFIRFilter(taps);
     }
 
     /**
@@ -115,17 +134,17 @@ public class P25P1Decoder extends Decoder implements IByteBufferProvider, ICompl
     public void receive(ComplexSamples samples)
     {
         mMessageFramer.setTimestamp(samples.timestamp());
-
 //TODO: should we use different filters for different radio formats (e.g. C4FM vs LSM vs Conventional)???
+        float[] i = mIBasebandFilter.filter(samples.i());
+        float[] q = mQBasebandFilter.filter(samples.q());
+//        float[] i = samples.i();
+//        float[] q = samples.q();
 
-//        float[] i = mIBasebandFilter.filter(samples.i());
-//        float[] q = mQBasebandFilter.filter(samples.q());
-        float[] i = samples.i();
-        float[] q = samples.q();
+//        i = mRRCFilterI.filter(samples.i());
+//        q = mRRCFilterQ.filter(samples.q());
 
         //Process buffer for power measurements
         mPowerMonitor.process(i, q);
-
         float[] demodulated = mDemodulator.demodulate(i, q);
         mSymbolProcessor.receive(demodulated);
     }
@@ -253,16 +272,26 @@ public class P25P1Decoder extends Decoder implements IByteBufferProvider, ICompl
     {
         LOGGER.info("Starting ...");
 
+        DecodeConfigP25Phase1 config = new DecodeConfigP25Phase1();
+
 //                String directory = "D:\\DQPSK Equalizer Research - P25\\"; //Windows
         String directory = "/media/denny/T9/DQPSK Equalizer Research - P25/"; //Linux
+
         String file = directory + "P25-S1-Conventional-repeater-20241115_212221_469325000_QPS_Digital_Kynoch_Kynoch_Digital_59_baseband.wav";
+        config.setModulation(Modulation.C4FM);
+
 //        String file = directory + "P25-S2-LSM-20241225_040119_460500000_CNYICC_Onondaga_Onondaga_CC_0_baseband.wav";
+//        config.setModulation(Modulation.CQPSK);
+
 //        String file = directory + "P25-S3-C4FM-20241225_040459_152517500_NYSEG_Onondaga_Control_30_baseband.wav";
+//        config.setModulation(Modulation.C4FM);
+
 //        String file = directory + "P25-S4-LSM-TCH-Data-20250105_141051_453587500_CNYICC_Onondaga_T-Onondaga_CC_38_baseband.wav";
+//        config.setModulation(Modulation.CQPSK);
 
         boolean autoReplay = false;
 
-        P25P1Decoder decoder = new P25P1Decoder(new DecodeConfigP25Phase1());
+        P25P1Decoder decoder = new P25P1Decoder(config);
         decoder.start();
 
         UserPreferences userPreferences = new UserPreferences();
@@ -320,7 +349,7 @@ public class P25P1Decoder extends Decoder implements IByteBufferProvider, ICompl
                 boolean logSLC = false;
                 boolean logCACH = false;
                 boolean logIdles = false;
-                boolean logEverything = true;
+                boolean logEverything = false;
 
                 if(!logEverything && logFLC)
                 {

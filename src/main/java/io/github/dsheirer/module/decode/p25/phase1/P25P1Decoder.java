@@ -1,6 +1,6 @@
 /*
  * *****************************************************************************
- * Copyright (C) 2014-2023 Dennis Sheirer
+ * Copyright (C) 2014-2025 Dennis Sheirer
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,9 +22,6 @@ import com.google.common.eventbus.Subscribe;
 import io.github.dsheirer.dsp.squelch.PowerMonitor;
 import io.github.dsheirer.dsp.symbol.Dibit;
 import io.github.dsheirer.dsp.symbol.DibitToByteBufferAssembler;
-import io.github.dsheirer.identifier.Identifier;
-import io.github.dsheirer.identifier.Role;
-import io.github.dsheirer.identifier.patch.PatchGroupIdentifier;
 import io.github.dsheirer.module.decode.DecoderType;
 import io.github.dsheirer.module.decode.FeedbackDecoder;
 import io.github.dsheirer.module.decode.p25.P25FrequencyBandPreloadDataContent;
@@ -195,33 +192,4 @@ public abstract class P25P1Decoder extends FeedbackDecoder implements ISourceEve
 
     public abstract Modulation getModulation();
 
-    public enum Modulation
-    {
-        CQPSK("Simulcast (LSM)", "LSM"),
-        C4FM("Normal (C4FM)", "C4FM");
-
-        private String mLabel;
-        private String mShortLabel;
-
-        private Modulation(String label, String shortLabel)
-        {
-            mLabel = label;
-            mShortLabel = shortLabel;
-        }
-
-        public String getLabel()
-        {
-            return mLabel;
-        }
-
-        public String getShortLabel()
-        {
-            return mShortLabel;
-        }
-
-        public String toString()
-        {
-            return getLabel();
-        }
-    }
 }

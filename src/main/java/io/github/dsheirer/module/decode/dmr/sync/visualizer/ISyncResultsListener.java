@@ -32,8 +32,11 @@ public interface ISyncResultsListener
      * @param sync pattern symbols (ideal)
      * @param samples demodulated samples
      * @param syncIntervals for timing of each symbol in the samples array
+     * @param equalizerBalance balance for the equalizer
+     * @param equalizerGain gain for the equalizer
      * @param label to display in the UI
      * @param release that pauses execution until the user acknowledges the displayed sync results.  Decrement the latch to release.
      */
-    void receive(float[] symbols, float[] sync, float[] samples, float[] syncIntervals, String label, CountDownLatch release);
+    void receive(float[] symbols, float[] sync, float[] samples, float[] syncIntervals, float equalizerBalance,
+                 float equalizerGain, String label, CountDownLatch release);
 }

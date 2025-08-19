@@ -1,6 +1,6 @@
 /*
  * *****************************************************************************
- * Copyright (C) 2014-2024 Dennis Sheirer
+ * Copyright (C) 2014-2025 Dennis Sheirer
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -62,15 +62,10 @@ public abstract class P25P1SoftSyncDetector extends P25P1SyncDetector
      */
     public float process(float dibitSymbol)
     {
-        //Constrain symbol to maximum positive or negative value to limit noisy symbols.
-        dibitSymbol = Math.min(dibitSymbol, MAX_POSITIVE);
-        dibitSymbol = Math.max(dibitSymbol, MAX_NEGATIVE);
-
         mSymbols[mSymbolPointer] = dibitSymbol;
         mSymbols[mSymbolPointer + 24] = dibitSymbol;
         mSymbolPointer++;
         mSymbolPointer %= 24;
-
         return calculate();
     }
 }

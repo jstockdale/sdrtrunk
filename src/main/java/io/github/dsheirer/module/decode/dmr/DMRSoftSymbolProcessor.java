@@ -21,6 +21,7 @@ package io.github.dsheirer.module.decode.dmr;
 
 import io.github.dsheirer.dsp.filter.interpolator.LinearInterpolator;
 import io.github.dsheirer.dsp.symbol.Dibit;
+import io.github.dsheirer.dsp.symbol.DibitDelayLine;
 import io.github.dsheirer.dsp.symbol.DibitToByteBufferAssembler;
 import io.github.dsheirer.module.decode.dmr.sync.DMRSoftSyncDetector;
 import io.github.dsheirer.module.decode.dmr.sync.DMRSoftSyncDetectorFactory;
@@ -608,7 +609,8 @@ public class DMRSoftSymbolProcessor
         Arrays.fill(sync, -1.57f); //Cutoff between -1 & -1 to show symbol timings
 
         CountDownLatch countDownLatch = new CountDownLatch(1);
-        mSyncResultsViewer.receive(symbols, sync, samples, intervals, "BUFFER CONTENTS", countDownLatch);
+        mSyncResultsViewer.receive(symbols, sync, samples, intervals, mEqualizerBalance, mEqualizerGain,
+                "BUFFER CONTENTS", countDownLatch);
 
         try
         {
@@ -665,7 +667,7 @@ public class DMRSoftSymbolProcessor
         }
 
         CountDownLatch countDownLatch = new CountDownLatch(1);
-        mSyncResultsViewer.receive(symbols, pattern.toSymbols(), samples, intervals,
+        mSyncResultsViewer.receive(symbols, pattern.toSymbols(), samples, intervals, mEqualizerBalance, mEqualizerGain,
                 pattern + " Score: " + score + (primary ? " PRIMARY" : " SECONDARY"), countDownLatch);
 
         try

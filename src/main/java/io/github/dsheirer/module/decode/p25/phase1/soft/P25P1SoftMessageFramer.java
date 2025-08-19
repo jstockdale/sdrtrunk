@@ -183,6 +183,8 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
             mMessageListener.receive(slm);
         }
 
+        System.out.println("** Setting TDULC message assembler to null");
+
         mMessageAssembler = null;
 
         mTrailingDibitsToSuppress = 11;
@@ -208,6 +210,25 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
         }
 
         mMessageAssembler = null;
+    }
+
+    /**
+     * Indicates if a message is being assembled.  Note: returns false when we are assembling to a PLACEHOLDER since
+     * that is a non-specific message assembly.
+     */
+    public boolean isAssembling()
+    {
+        return mMessageAssembler != null && mMessageAssembler.getDataUnitID() != P25P1DataUnitID.PLACEHOLDER;
+    }
+
+    public P25P1DataUnitID getAssemblingDUID()
+    {
+        if(isAssembling())
+        {
+            return mMessageAssembler.getDataUnitID();
+        }
+
+        return null;
     }
 
     /**
@@ -341,6 +362,15 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
                 if(header != null)
                 {
                     mPDUSequence = new PDUSequence(header, getTimestamp(), mMessageAssembler.getNAC());
+
+                    if(mPDUSequence.getHeader().isValid())
+                    {
+                        System.out.println(">> PDU BLOCKS TO FOLLOW: " +  mPDUSequence.getHeader().getBlocksToFollowCount());
+                    }
+                    else
+                    {
+                        System.out.println(">> PDU BLOCKS TO FOLLOW: invalid header");
+                    }
 
                     if(mPDUSequence.getHeader().isValid() && mPDUSequence.getHeader().getBlocksToFollowCount() > 0)
                     {

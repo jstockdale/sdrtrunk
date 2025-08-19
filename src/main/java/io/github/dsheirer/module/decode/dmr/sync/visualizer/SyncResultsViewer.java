@@ -42,18 +42,19 @@ public class SyncResultsViewer implements ISyncResultsListener
     /**
      * View sync detection results.
      * @param symbols that were detected
-     * @param samples for the symbols
      * @param sync that was detected
+     * @param samples for the symbols
      * @param syncIntervals symbol timing interval pointers into the I/Q sample arrays
      * @param label to display to the user
      * @param release latch to release via the UI when done viewing these results
      */
     @Override
-    public void receive(float[] symbols, float[] sync, float[] samples, float[] syncIntervals, String label, CountDownLatch release)
+    public void receive(float[] symbols, float[] sync, float[] samples, float[] syncIntervals, float equalizerBalance,
+                        float equalizerGain, String label, CountDownLatch release)
     {
         if(mListener != null)
         {
-            mListener.receive(symbols, samples, sync, syncIntervals, label, release);
+            mListener.receive(symbols, samples, sync, syncIntervals, equalizerBalance, equalizerGain, label, release);
         }
     }
 

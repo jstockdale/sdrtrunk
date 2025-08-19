@@ -17,9 +17,8 @@
  * ****************************************************************************
  */
 
-package io.github.dsheirer.module.decode.dmr;
+package io.github.dsheirer.dsp.symbol;
 
-import io.github.dsheirer.dsp.symbol.Dibit;
 import java.util.Arrays;
 
 /**
@@ -27,9 +26,8 @@ import java.util.Arrays;
  */
 public class DibitDelayLine
 {
-    private Dibit[] mDelayLine;
+    protected Dibit[] mDelayLine;
     public int mPointer;
-    private int mLength;
 
     /**
      * Constructs an instance
@@ -37,7 +35,6 @@ public class DibitDelayLine
      */
     public DibitDelayLine(int length)
     {
-        mLength = length;
         mDelayLine = new Dibit[length];
         Arrays.fill(mDelayLine, Dibit.D00_PLUS_1);
     }
@@ -51,7 +48,7 @@ public class DibitDelayLine
     {
         Dibit ejected = mDelayLine[mPointer];
         mDelayLine[mPointer++] = dibit;
-        mPointer %= mLength;
+        mPointer %= mDelayLine.length;
         return ejected;
     }
 
@@ -72,8 +69,42 @@ public class DibitDelayLine
         for(Dibit dibit: dibits)
         {
             mDelayLine[mPointer++] = dibit;
-            mPointer %= mLength;
+            mPointer %= mDelayLine.length;
         }
+    }
+
+    /**
+     * Adjusts the pointer to correct a dibit stuff/delete.
+     * @param offset to adjust.
+     */
+    public void adjustPointer(int offset)
+    {
+        mPointer += offset;
+
+        if(mPointer < 0)
+        {
+            mPointer += mDelayLine.length;
+        }
+        else if(mPointer >= mDelayLine.length)
+        {
+            mPointer -= mDelayLine.length;
+        }
+    }
+
+
+    /**
+     * Returns the most recently stored Dibit.
+     */
+    public Dibit getLast()
+    {
+        int pointer = mPointer - 1;
+
+        if(pointer < 0)
+        {
+            pointer += mDelayLine.length;
+        }
+
+        return mDelayLine[pointer];
     }
 
     public void log()
@@ -89,7 +120,7 @@ public class DibitDelayLine
             sb.append(" ");
 
             pointer++;
-            pointer = pointer % mLength;
+            pointer = pointer % mDelayLine.length;
         }
 
         System.out.println(sb);

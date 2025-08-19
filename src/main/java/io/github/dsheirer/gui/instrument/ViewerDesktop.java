@@ -1,6 +1,6 @@
 /*
  * *****************************************************************************
- * Copyright (C) 2014-2022 Dennis Sheirer
+ * Copyright (C) 2014-2025 Dennis Sheirer
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,10 +22,9 @@ import io.github.dsheirer.gui.instrument.decoder.AbstractDecoderPane;
 import io.github.dsheirer.gui.instrument.decoder.DecoderPaneFactory;
 import io.github.dsheirer.gui.instrument.decoder.RealDecoderPane;
 import io.github.dsheirer.module.decode.DecoderType;
-import io.github.dsheirer.module.decode.p25.phase1.P25P1Decoder;
-import javafx.scene.layout.BorderPane;
-
+import io.github.dsheirer.module.decode.p25.phase1.Modulation;
 import java.io.File;
+import javafx.scene.layout.BorderPane;
 
 public class ViewerDesktop extends BorderPane
 {
@@ -49,7 +48,7 @@ public class ViewerDesktop extends BorderPane
         setDecoderPane(DecoderPaneFactory.getDecoderPane(decoderType));
     }
 
-    public void setP25Phase1Decoder(P25P1Decoder.Modulation modulation)
+    public void setP25Phase1Decoder(Modulation modulation)
     {
         setDecoderPane(DecoderPaneFactory.getP25P1DecoderPane(modulation));
     }

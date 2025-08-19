@@ -1,6 +1,6 @@
 /*
  * *****************************************************************************
- * Copyright (C) 2014-2024 Dennis Sheirer
+ * Copyright (C) 2014-2025 Dennis Sheirer
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@
 package io.github.dsheirer.gui.instrument.decoder;
 
 import io.github.dsheirer.module.decode.DecoderType;
-import io.github.dsheirer.module.decode.p25.phase1.P25P1Decoder;
+import io.github.dsheirer.module.decode.p25.phase1.Modulation;
 import java.util.EnumSet;
 
 public class DecoderPaneFactory
@@ -65,7 +65,7 @@ public class DecoderPaneFactory
     /**
      * Creates a decoder pane for the P25 decoder type
      */
-    public static AbstractDecoderPane getP25P1DecoderPane(P25P1Decoder.Modulation modulation)
+    public static AbstractDecoderPane getP25P1DecoderPane(Modulation modulation)
     {
         switch(modulation)
         {

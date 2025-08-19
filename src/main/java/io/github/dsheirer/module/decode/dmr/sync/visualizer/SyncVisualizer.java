@@ -38,13 +38,22 @@ import javafx.scene.layout.VBox;
  */
 public class SyncVisualizer extends VBox implements ISyncResultsListener
 {
-    private static final float SYMBOL = (float)(Math.PI / 4.0);
+    private static final float SYMBOL = (float) (Math.PI / 4.0);
     private final NumberAxis mConstellationI = new NumberAxis();
     private final NumberAxis mConstellationQ = new NumberAxis();
     private final NumberAxis mSampleTiming = new NumberAxis();
-    private final NumberAxis mSamplePhase = new NumberAxis();
-    private final ScatterChart<Number,Number> mConstellationChart = new ScatterChart<>(mConstellationI, mConstellationQ);
-    private final LineChart<Number,Number> mSampleChart = new LineChart<>(mSampleTiming, mSamplePhase);
+    private final NumberAxis mSamplePhase = new NumberAxis(-3.5, 3.5, .5);
+    private final ScatterChart<Number, Number> mConstellationChart = new ScatterChart<>(mConstellationI, mConstellationQ);
+    private final LineChart<Number, Number> mSampleChart = new LineChart<>(mSampleTiming, mSamplePhase);
+
+    private final NumberAxis mEqualizerHistoryAxis = new NumberAxis();
+    private final NumberAxis mEqualizerValueAxis = new NumberAxis(-.8, .8, .1);
+    private final LineChart<Number, Number> mEqualizerChart = new LineChart<>(mEqualizerHistoryAxis, mEqualizerValueAxis);
+    private int mEqualizerPointer = 0;
+    private int mEqualizerHistorySize = 40;
+    private float[] mEqualizerBalanceHistory = new float[mEqualizerHistorySize];
+    private float[] mEqualizerGainHistory = new float[mEqualizerHistorySize];
+
     private final Button mReleaseButton = new Button("Next Sync");
     private final Label mPatternLabel = new Label();
     private CountDownLatch mRelease;
@@ -55,13 +64,12 @@ public class SyncVisualizer extends VBox implements ISyncResultsListener
     public SyncVisualizer()
     {
         setPadding(new Insets(5));
-        mConstellationI.setLabel("Inphase");
+        mConstellationI.setLabel("Constellation - Inphase");
         mConstellationQ.setLabel("Quadrature");
         mSampleTiming.setLabel("Sample Timing");
         mSamplePhase.setLabel("Sample Phase (+/- PI)");
 
-        mReleaseButton.setOnAction(e ->
-        {
+        mReleaseButton.setOnAction(e -> {
             if(mRelease != null)
             {
                 mRelease.countDown();
@@ -70,30 +78,47 @@ public class SyncVisualizer extends VBox implements ISyncResultsListener
         });
 
         mConstellationChart.setPrefSize(400, 400);
+        mConstellationChart.setAnimated(false);
+        mSampleChart.setAnimated(false);
+        mEqualizerChart.setAnimated(false);
+
+        mEqualizerValueAxis.setLabel("Value");
+        mEqualizerHistoryAxis.setLabel("Equalizer");
+
         HBox hbox = new HBox();
         hbox.getChildren().add(mConstellationChart);
-//        VBox.setVgrow(hbox, Priority.ALWAYS);
+        HBox.setHgrow(mEqualizerChart, Priority.ALWAYS);
+        hbox.getChildren().add(mEqualizerChart);
+        //        VBox.setVgrow(hbox, Priority.ALWAYS);
+
         VBox.setVgrow(mSampleChart, Priority.ALWAYS);
 
         HBox buttons = new HBox();
-        buttons.setAlignment(Pos.BASELINE_CENTER);
+        buttons.setAlignment(Pos.BASELINE_LEFT);
         buttons.setSpacing(10);
         buttons.getChildren().addAll(mReleaseButton, mPatternLabel);
         VBox.setVgrow(buttons, Priority.NEVER);
 
-        getChildren().addAll(hbox, mSampleChart, buttons);
+        getChildren().addAll(buttons, hbox, mSampleChart);
     }
 
     @Override
-    public void receive(float[] symbols, float[] samples, float[] sync, float[] syncIntervals, String label, CountDownLatch latch)
+    public void receive(float[] symbols, float[] samples, float[] sync, float[] syncIntervals, float equalizerBalance, float equalizerGain, String label, CountDownLatch latch)
     {
         mRelease = latch;
         mReleaseButton.setDisable(latch == null);
 
+        mEqualizerBalanceHistory[mEqualizerPointer] = equalizerBalance;
+        mEqualizerGainHistory[mEqualizerPointer++] = (equalizerGain - 1.0f);
+        mEqualizerPointer %= mEqualizerHistorySize;
+        //Clear the next/upcoming values to give visual indication of where we're at.
+        mEqualizerBalanceHistory[mEqualizerPointer] = 0f;
+        mEqualizerGainHistory[mEqualizerPointer] = 0f;
+
         Platform.runLater(() -> {
-            XYChart.Series<Number,Number> constellationIdeal = new XYChart.Series<>();
-            constellationIdeal.setName("Constellation Ideal");
-            float PI_4 = (float)(Math.PI / 4);
+            XYChart.Series<Number, Number> constellationIdeal = new XYChart.Series<>();
+            constellationIdeal.setName("Ideal");
+            float PI_4 = (float) (Math.PI / 4);
             constellationIdeal.getData().add(new XYChart.Data<>(PI_4, PI_4));
             constellationIdeal.getData().add(new XYChart.Data<>(PI_4, -PI_4));
             constellationIdeal.getData().add(new XYChart.Data<>(-PI_4, PI_4));
@@ -106,8 +131,8 @@ public class SyncVisualizer extends VBox implements ISyncResultsListener
             mConstellationChart.getData().clear();
             mConstellationChart.getData().add(constellationIdeal);
 
-            XYChart.Series<Number,Number> constellation = new XYChart.Series<>();
-            constellation.setName("Constellation");
+            XYChart.Series<Number, Number> constellation = new XYChart.Series<>();
+            constellation.setName("Decoded");
 
             for(int x = 0; x < symbols.length; x++)
             {
@@ -116,8 +141,7 @@ public class SyncVisualizer extends VBox implements ISyncResultsListener
 
             mConstellationChart.getData().add(constellation);
 
-
-            XYChart.Series<Number,Number> sampleSeries = new XYChart.Series<>();
+            XYChart.Series<Number, Number> sampleSeries = new XYChart.Series<>();
             sampleSeries.setName("Demodulated Samples");
 
             for(int x = 0; x < samples.length; x++)
@@ -128,7 +152,7 @@ public class SyncVisualizer extends VBox implements ISyncResultsListener
             mSampleChart.getData().clear();
             mSampleChart.getData().add(sampleSeries);
 
-            XYChart.Series<Number,Number> patternSeries = new XYChart.Series<>();
+            XYChart.Series<Number, Number> patternSeries = new XYChart.Series<>();
             patternSeries.setName("Ideal Sync Pattern");
 
             for(int x = 0; x < sync.length; x++)
@@ -139,6 +163,21 @@ public class SyncVisualizer extends VBox implements ISyncResultsListener
             mSampleChart.getData().add(patternSeries);
 
             mPatternLabel.setText(label);
+            mEqualizerChart.getData().clear();
+
+            XYChart.Series<Number, Number> balanceSeries = new XYChart.Series<>();
+            balanceSeries.setName("Balance");
+            XYChart.Series<Number, Number> gainSeries = new XYChart.Series<>();
+            gainSeries.setName("Gain (Value minus 1.0)");
+
+            for(int x = 0; x < mEqualizerHistorySize; x++)
+            {
+                balanceSeries.getData().add(new XYChart.Data<>(x, mEqualizerBalanceHistory[x]));
+                gainSeries.getData().add(new XYChart.Data<>(x, mEqualizerGainHistory[x]));
+            }
+
+            mEqualizerChart.getData().add(balanceSeries);
+            mEqualizerChart.getData().add(gainSeries);
         });
     }
 }
