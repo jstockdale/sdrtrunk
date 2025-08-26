@@ -68,6 +68,12 @@ public class P25P1MessageAssembler implements Listener<Dibit>
             length += 2;
         }
 
+        if(length < 0)
+        {
+            length = 0;
+            System.out.println("Negative message length [" + length + "]  duid [" + duid.toString() + "]");
+        }
+
         mMessage = new CorrectedBinaryMessage(length);
     }
 

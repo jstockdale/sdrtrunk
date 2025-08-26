@@ -135,10 +135,10 @@ public class P25P1Decoder extends Decoder implements IByteBufferProvider, ICompl
     {
         mMessageFramer.setTimestamp(samples.timestamp());
 //TODO: should we use different filters for different radio formats (e.g. C4FM vs LSM vs Conventional)???
-        float[] i = mIBasebandFilter.filter(samples.i());
-        float[] q = mQBasebandFilter.filter(samples.q());
-//        float[] i = samples.i();
-//        float[] q = samples.q();
+//        float[] i = mIBasebandFilter.filter(samples.i());
+//        float[] q = mQBasebandFilter.filter(samples.q());
+        float[] i = samples.i();
+        float[] q = samples.q();
 
 //        i = mRRCFilterI.filter(samples.i());
 //        q = mRRCFilterQ.filter(samples.q());
