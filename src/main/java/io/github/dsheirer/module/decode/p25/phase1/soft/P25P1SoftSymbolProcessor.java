@@ -34,34 +34,28 @@ import io.github.dsheirer.module.decode.p25.phase1.sync.P25P1SoftSyncDetector;
 import io.github.dsheirer.module.decode.p25.phase1.sync.P25P1SoftSyncDetectorFactory;
 import io.github.dsheirer.module.decode.p25.phase1.sync.P25P1SyncDetector;
 import io.github.dsheirer.sample.Listener;
+import org.apache.commons.math3.stat.descriptive.moment.StandardDeviation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.nio.ByteBuffer;
 import java.text.DecimalFormat;
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
-import org.apache.commons.math3.stat.descriptive.moment.StandardDeviation;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class P25P1SoftSymbolProcessor
 {
     private static final Logger LOGGER = LoggerFactory.getLogger(P25P1SoftSymbolProcessor.class);
     private static final LoggingSuppressor LOGGING_SUPPRESSOR = new LoggingSuppressor(LOGGER);
-    private static final int DIBIT_LENGTH_PROTECTED_REGION = 26; //Sync (24) plus 2
-    private static final int DIBIT_LENGTH_WORKSPACE_LENGTH = 25; //This can be adjusted for efficiency
-    private static final int DIBIT_LENGTH_NID = 33; //32 dibits (64 bits) plus 1 status symbol dibit
+    private static final int DIBIT_LENGTH_NID = 33; //32 dibits (64 bits) +1 status
     private static final int DIBIT_LENGTH_SYNC = 24;
-    private static final int DIBIT_LENGTH_BUFFER = DIBIT_LENGTH_PROTECTED_REGION + DIBIT_LENGTH_WORKSPACE_LENGTH + DIBIT_LENGTH_NID;
-    private static final int DIBIT_LENGTH_MIN_FOR_CHECK_SYNC = 38; //TDU is 63 dibits - 24 sync = 39 - 1 for possible overlap
-    private static final double NO_OPTIMIZATION = Double.MAX_VALUE;
-    private static final float SOFT_SYMBOL_MAX_POSITIVE = Dibit.D01_PLUS_3.getIdealPhase();
-    private static final float SOFT_SYMBOL_MAX_NEGATIVE = Dibit.D11_MINUS_3.getIdealPhase();
+    private static final Correction INVALID_SYNC_DETECTION = new Correction(Double.MAX_VALUE, 0f, 0f);
     private static final float SOFT_SYMBOL_MAX_POSITIVE_PHASE = 3.5f;
     private static final float SOFT_SYMBOL_MAX_NEGATIVE_PHASE = -3.5f;
     private static final float SOFT_SYMBOL_QUADRANT_BOUNDARY = (float)(Math.PI / 2.0);
     private static final float SYNC_THRESHOLD_DETECTION = 60;
     private static final float SYNC_THRESHOLD_OPTIMIZED = 80;
-    private static final float SYNC_THRESHOLD_EQUALIZED = 100;
-    private static final float EQUALIZER_LOOP_GAIN = 0.1f;
+    private static final float EQUALIZER_LOOP_GAIN = 0.25f;
     private static final float EQUALIZER_MAXIMUM_BALANCE = (float)(Math.PI / 4.0);
     private static final float EQUALIZER_RECALIBRATE_THRESHOLD = (float)(Math.PI / 8.0);
     private static final float EQUALIZER_MAXIMUM_GAIN = 1.35f;
@@ -74,7 +68,7 @@ public class P25P1SoftSymbolProcessor
     private P25P1SoftSyncDetector mSyncDetectorLag2 = P25P1SoftSyncDetectorFactory.getDetector();
     private DibitToByteBufferAssembler mDibitAssembler = new DibitToByteBufferAssembler(300);
     private P25P1SoftMessageFramer mMessageFramer;
-    private DibitDelayLine mNidDelayLine = new DibitDelayLine(DIBIT_LENGTH_SYNC + DIBIT_LENGTH_NID);
+    private DibitDelayLine mSymbolDelayLine = new DibitDelayLine(DIBIT_LENGTH_SYNC);
     private boolean mFineSync = false;
     private float mLaggingSyncOffset1;
     private float mLaggingSyncOffset2;
@@ -85,8 +79,9 @@ public class P25P1SoftSymbolProcessor
     private double mSamplePoint;
     private float[] mBuffer;
     private int mBufferLoadPointer;
+    private int mBufferReloadThreshold;
     private int mBufferPointer;
-    private int mBufferWorkspaceLength;
+    private int mBufferWorkspaceLength = 1024;
     private int mPreviousMessageSymbolLength;
     private P25P1DataUnitID mPreviousDataUnitID;
     private int mSymbolsSinceLastSync = DIBIT_LENGTH_NID; //Set to NID length (72) to prevent false initial NID calculation.
@@ -124,41 +119,30 @@ public class P25P1SoftSymbolProcessor
     public boolean receive(float[] samples)
     {
         boolean debugReturn = false;
-
         int samplesPointer = 0;
+        float softSymbol;
+        Dibit delayedSymbol;
+        Correction correctionCandidate;
 
         while(samplesPointer < samples.length)
         {
-            if(mBufferLoadPointer == mBuffer.length)
+            //Note: buffer pointer can become greater than reload threshold during timing optimization at sync detect
+            if(mBufferPointer >= mBufferReloadThreshold)
             {
-                System.arraycopy(mBuffer, mBufferWorkspaceLength, mBuffer, 0, mBuffer.length - mBufferWorkspaceLength);
-                mBufferLoadPointer -= mBufferWorkspaceLength;
-                mBufferPointer -= mBufferWorkspaceLength;
+                //Do reload
+                int copyLength = Math.min(mBufferWorkspaceLength, samples.length - samplesPointer);
+                System.arraycopy(mBuffer, copyLength, mBuffer, 0, mBuffer.length - copyLength);
+                System.arraycopy(samples, samplesPointer, mBuffer, mBuffer.length - copyLength, copyLength);
+                samplesPointer += copyLength;
+                mBufferPointer -= copyLength;
+                mEqualizer.process(copyLength); //Equalize the newly added samples and optionally unwrap phases.
             }
 
-            int copyLength = Math.min(mBuffer.length - mBufferLoadPointer, samples.length - samplesPointer);
-            System.arraycopy(samples, samplesPointer, mBuffer, mBufferLoadPointer, copyLength);
-            samplesPointer += copyLength;
-            mBufferLoadPointer += copyLength;
-
-            //Equalize samples and optionally unwrap phases.
-            mEqualizer.process(copyLength);
-
-            float softSymbol;
-            Dibit delayedSymbol;
-            double adjustment;
-            String tag = null;
-
-            while(mBufferPointer < (mBufferLoadPointer - mSyncOffsetForReload))
+            while(mBufferPointer < mBufferReloadThreshold)
             {
                 mBufferPointer++;
                 mSamplePoint--;
                 mDebugSampleCount++;
-
-                if(mDebugSampleCount > 3_064_000 && mDebugSymbolCount % 25 == 0)
-                {
-                    visualizeSyncDetect(0, false, "Symbols: " + mDebugSymbolCount + " Samples: " + mDebugSampleCount);
-                }
 
                 if(mSamplePoint < 1)
                 {
@@ -166,32 +150,31 @@ public class P25P1SoftSymbolProcessor
                     mDebugSymbolCount++;
 
                     //Toggle assembling vs sync detection mode once the message framer stops assembling a message
-                    if(mSyncDetectionMode ^ mMessageFramer.isAssembling())
-                    {
-                        mSyncDetectionMode = !mSyncDetectionMode;
-
-                        if(!mSyncDetectionMode)
-                        {
-                            System.out.println("TODO: enable the sync detection resets ...********************");
-//                            mSyncDetector.reset();
-//                            mSyncDetectorLag1.reset();
-//                            mSyncDetectorLag2.reset();
-                        }
-                    }
+//                    if(mSyncDetectionMode ^ mMessageFramer.isAssembling())
+//                    {
+//                        mSyncDetectionMode = !mSyncDetectionMode;
+//
+//                        if(!mSyncDetectionMode)
+//                        {
+//                            System.out.println("TODO: enable the sync detection resets ...********************");
+////                            mSyncDetector.reset();
+////                            mSyncDetectorLag1.reset();
+////                            mSyncDetectorLag2.reset();
+//                        }
+//                    }
 
                     if(mSyncDetectionMode)
                     {
                         softSymbol = LinearInterpolator.calculate(mBuffer[mBufferPointer], mBuffer[mBufferPointer + 1], mSamplePoint);
                         float scorePrimary = mSyncDetector.process(softSymbol);
 
-                        adjustment = NO_OPTIMIZATION;
+                        correctionCandidate = INVALID_SYNC_DETECTION;
 
                         if(mFineSync)
                         {
                             if(scorePrimary > SYNC_THRESHOLD_DETECTION)
                             {
-                                tag = "PRI:" + scorePrimary;
-                                adjustment = optimize(0, tag);
+                                correctionCandidate = optimize(0);
                             }
                         }
                         else
@@ -205,61 +188,66 @@ public class P25P1SoftSymbolProcessor
                             float softSymbolLag2 = LinearInterpolator.calculate(mBuffer[lagIntegral2], mBuffer[lagIntegral2 + 1], lag2 - lagIntegral2);
                             float scoreLag1 = mSyncDetectorLag1.process(softSymbolLag1);
                             float scoreLag2 = mSyncDetectorLag2.process(softSymbolLag2);
-                            tag = "PRI:" + scorePrimary + " LAG1:" + scoreLag1 + " LAG2:" + scoreLag2;
 
                             if(mSymbolsSinceLastSync > 1)
                             {
                                 if(scorePrimary > SYNC_THRESHOLD_DETECTION && scorePrimary > scoreLag1 && scorePrimary > scoreLag2)
                                 {
-                                    tag = "PRI:" + scorePrimary;
-                                    adjustment = optimize(0.0f, tag);
+                                    correctionCandidate = optimize(0.0f);
                                 }
 
-                                if(adjustment == NO_OPTIMIZATION && scoreLag1 > SYNC_THRESHOLD_DETECTION && scoreLag1 > scoreLag2)
+                                if(correctionCandidate == INVALID_SYNC_DETECTION && scoreLag1 > SYNC_THRESHOLD_DETECTION && scoreLag1 > scoreLag2)
                                 {
-                                    tag = "LAG1:" + scoreLag1;
-                                    adjustment = optimize(-mLaggingSyncOffset1, tag);
+                                    correctionCandidate = optimize(-mLaggingSyncOffset1);
                                 }
 
-                                if(adjustment == NO_OPTIMIZATION && scoreLag2 > SYNC_THRESHOLD_DETECTION)
+                                if(correctionCandidate == INVALID_SYNC_DETECTION && scoreLag2 > SYNC_THRESHOLD_DETECTION)
                                 {
-                                    tag = "LAG2:" + scoreLag2;
-                                    adjustment = optimize(-mLaggingSyncOffset2, tag);
+                                    correctionCandidate = optimize(-mLaggingSyncOffset2);
                                 }
                             }
                         }
 
-                        if(adjustment < NO_OPTIMIZATION)
+                        if(correctionCandidate.hasValidTiming())
                         {
-                            //Apply the candidate adjustment if it produces a valid NID
-                            boolean validNID = validateNID(adjustment);
+                            validateNID(correctionCandidate);
 
-                            if(validNID)
+                            if(correctionCandidate.isValid())
                             {
-                                mSamplePoint += adjustment;
+                                //Apply correction values to timing and equalizer.
+                                apply(correctionCandidate);
 
-                                while(mSamplePoint < 0)
+                                //Overwrite the sync symbols in the symbol delay line
+                                for(Dibit syncSymbol: SYNC_PATTERN_DIBITS)
                                 {
-                                    mSamplePoint++;
-                                    mBufferPointer--;
+                                    mSymbolDelayLine.insert(syncSymbol);
                                 }
 
-                                while(mSamplePoint > 1)
+                                System.out.println("VALID NID Correction Candidate: " +  correctionCandidate + " Samples [" + mDebugSampleCount + "] Symbols [" + mDebugSymbolCount + "]");
+                                System.out.println("\tValid NID Detected for NAC: " + correctionCandidate.getNAC() +
+                                        " DUID: " + correctionCandidate.getDataUnitID());
+
+                                if(mDebugSampleCount > 7_982_000)
                                 {
-                                    mSamplePoint--;
-                                    mBufferPointer++;
+                                    visualizeSyncDetect(0, true, "valid NID");
                                 }
 
                                 mFineSync = true;
+                                mMessageFramer.syncDetected(correctionCandidate.getNAC(), correctionCandidate.getDataUnitID());
+                            }
+                            else
+                            {
+                                System.out.println("INVALID NID Correction Candidate: " +  correctionCandidate + " Samples [" + mDebugSampleCount + "] Symbols [" + mDebugSymbolCount + "]");
+
+                                if(mDebugSampleCount > 7_982_000)
+                                {
+                                    visualizeSyncDetect(0, true, "*** JUNK NID DETECTED ***");
+                                }
                             }
 
                             mPreviousMessageSymbolLength = mSymbolsSinceLastSync;
-                            mPreviousDataUnitID = mCurrentDataUnitID;
-
+                            mPreviousDataUnitID = correctionCandidate.getDataUnitID();
                             mSymbolsSinceLastSync = 33;
-                            System.out.println("\nSYNC PRIMARY   FINE - ELAPSED [" +
-                                    mPreviousMessageSymbolLength + "] FOR [" + mPreviousDataUnitID +
-                                    "] SAMPLES [" + mDebugSampleCount + "] SYMBOLS [" + mDebugSymbolCount + "]");
                         }
                     }
 
@@ -292,7 +280,7 @@ public class P25P1SoftSymbolProcessor
                     }
 
                     //Calculate next symbol and get dibit from the delay line and feed the message framer and dibit assembler.
-                    delayedSymbol = mNidDelayLine.insert(toSymbol(getProjectedSoftSymbol()));
+                    delayedSymbol = mSymbolDelayLine.insert(toSymbol(getProjectedSoftSymbol()));
                     mMessageFramer.receive(delayedSymbol);
                     mDibitAssembler.receive(delayedSymbol);
 
@@ -303,6 +291,29 @@ public class P25P1SoftSymbolProcessor
         }
 
         return debugReturn;
+    }
+
+    /**
+     * Applies the symbol timing and equalizer correction settings.
+     * @param correction to apply
+     */
+    private void apply(Correction correction)
+    {
+        mSamplePoint += correction.getTiming();
+
+        while(mSamplePoint < 0)
+        {
+            mSamplePoint++;
+            mBufferPointer--;
+        }
+
+        while(mSamplePoint > 1)
+        {
+            mSamplePoint--;
+            mBufferPointer++;
+        }
+
+        mEqualizer.apply(correction);
     }
 
     /**
@@ -342,12 +353,12 @@ public class P25P1SoftSymbolProcessor
 
     /**
      * On sync detection, calculates the optimal timing adjustment that achieves the highest sync correlation score or
-     * returns a NO_OPTIMIZATION sentinel value if the correlation score doesn't exceed the threshold.
+     * returns an INVALID_SYNC_DETECTION sentinel value if the correlation score doesn't exceed the threshold.
      * @param additionalOffset from current mBufferPointer and mSamplePoint.  This can be zero offset for the primary
      * sync detector or a lagging offset for the lagging sync detectors.
      * @return optimized timing adjustment or NO_OPTIMIZATION sentinel value.
      */
-    private Correction optimize(double additionalOffset, String tag)
+    private Correction optimize(double additionalOffset)
     {
         //Offset is the start of the first sample of the first symbol of the sync pattern calculated from the current
         //buffer pointer and sample point which should be the final sample of the final symbol of the detected sync.
@@ -356,7 +367,7 @@ public class P25P1SoftSymbolProcessor
         //Reject any sync detections where the sample:sample standard deviation exceeds the noise threshold.
         if(isNoisy(offset))
         {
-            return NO_OPTIMIZATION;
+            return INVALID_SYNC_DETECTION;
         }
 
         //Find the optimal symbol timing
@@ -416,15 +427,14 @@ public class P25P1SoftSymbolProcessor
         //If we didn't find an optimal correlation score above the 95 threshold, return a false sync.
         if(scoreCenter < SYNC_THRESHOLD_OPTIMIZED)
         {
-            return NO_OPTIMIZATION;
+            return INVALID_SYNC_DETECTION;
         }
 
-
-        System.out.println("\t\t$$$ Adjustment: " + adjustment + " Additional: " + additionalOffset + " Total: " + (adjustment + additionalOffset));
+//        System.out.println("\t\t$$$ Adjustment: " + adjustment + " Additional: " + additionalOffset + " Total: " + (adjustment + additionalOffset));
 
         adjustment += additionalOffset;
 
-        return mEqualizer.update(adjustment);
+        return mEqualizer.getCorrection(adjustment);
     }
 
     /**
@@ -554,11 +564,11 @@ public class P25P1SoftSymbolProcessor
         mSamplePoint = samplesPerSymbol;
         mLaggingSyncOffset1 = samplesPerSymbol / 3;
         mLaggingSyncOffset2 = mLaggingSyncOffset1 * 2;
-        mBufferWorkspaceLength = (int)Math.ceil(DIBIT_LENGTH_WORKSPACE_LENGTH * samplesPerSymbol);
-        int bufferLength = (int)(Math.ceil(DIBIT_LENGTH_BUFFER * samplesPerSymbol));
+        int bufferLength = mBufferWorkspaceLength + (int)(Math.ceil((DIBIT_LENGTH_SYNC + DIBIT_LENGTH_NID + 2) * samplesPerSymbol));
         mBuffer = new float[bufferLength];
-        mBufferLoadPointer = (int)Math.ceil(DIBIT_LENGTH_PROTECTED_REGION * samplesPerSymbol);
-        mBufferPointer = mBufferLoadPointer;
+//        mBufferLoadPointer = (int)Math.ceil(DIBIT_LENGTH_PROTECTED_REGION * samplesPerSymbol);
+        mBufferReloadThreshold = mBuffer.length - (int)Math.ceil(samplesPerSymbol * (DIBIT_LENGTH_NID + 1));
+        mBufferPointer = mBufferReloadThreshold;
     }
 
     /**
@@ -566,13 +576,13 @@ public class P25P1SoftSymbolProcessor
      * message framer with the extracted NAC and DUID values and overwrites the NID dibit delay buffer with the
      * static sync symbols and the resampled NID dibits so that the message framer and dibit assembler receive the
      * optimally sampled sync and NID dibit sequences.
-     * @param adjustment to apply when resampling the NID.
+     * @param correction (timing) to apply when resampling the NID.
      * @return true if a valid NID sequence was sampled to indicate that the correction value should be permanent
      */
-    private boolean validateNID(double adjustment)
+    private Correction validateNID(Correction correction)
     {
         //Current sample point + adjustment is pointing to the final sync symbol.  Resample the NID from here.
-        double pointer = mBufferPointer + mSamplePoint + adjustment + mObservedSamplesPerSymbol;
+        double pointer = mBufferPointer + mSamplePoint + correction.getTiming() + mObservedSamplesPerSymbol;
         double fractional;
         int integral;
         float softSymbol = 0;
@@ -602,65 +612,27 @@ public class P25P1SoftSymbolProcessor
         int trackedNAC = mNACTracker.getTrackedNAC();
         mBCHDecoder.decode(candidateNID, trackedNAC);
 
-        //A negative corrected bit count indicates failed to correct the NID message.
-        boolean validNID = candidateNID.getCorrectedBitCount() >= 0;
-
-        int nac = 0;
-
-        if(validNID)
+        //If error correction fails, return the original correction candidate
+        if(candidateNID.getCorrectedBitCount() < 0)
         {
-            nac = candidateNID.getInt(NAC_FIELD);
-            //The BCH decoder can over-correct the NID and produce an invalid NAC.  Compare it against the tracked NID to
-            //flag it as invalid NID when this happens.  The NAC tracker will give us a value of 0 until it has enough
-            //observations of a valid NID value.
-            if(trackedNAC > 0 && trackedNAC != nac)
-            {
-                validNID = false;
-            }
-            else
-            {
-                mNACTracker.track(nac);
-            }
+            return correction;
         }
 
-        if(validNID)
+        int nac = candidateNID.getInt(NAC_FIELD);
+        P25P1DataUnitID duid = P25P1DataUnitID.fromValue(candidateNID.getInt(DUID_FIELD));
+
+        //The BCH decoder can over-correct the NID and produce an invalid NAC.  Compare it against the tracked NID to
+        //flag it as invalid NID when this happens.  The NAC tracker will give us a value of 0 until it has enough
+        //observations of a valid NID value.
+        mNACTracker.track(nac);
+
+        if(trackedNAC > 0 && trackedNAC != nac)
         {
-            //If there is an adjustment, update dibit delay line with actual sync symbols and resampled NID symbols.
-            if(adjustment != 0)
-            {
-                for(Dibit syncSymbol: SYNC_PATTERN_DIBITS)
-                {
-                    mNidDelayLine.insert(syncSymbol);
-                }
-
-                //Insert all but the last resampled symbol.
-                for(int x = 0; x < resampledNIDSymbols.length - 1; x++)
-                {
-                    mNidDelayLine.insert(resampledNIDSymbols[x]);
-                }
-            }
-
-            mCurrentDataUnitID = P25P1DataUnitID.fromValue(candidateNID.getInt(DUID_FIELD));
-
-            if(!mCurrentDataUnitID.isValidatedElapsedDibitLengthDUID())
-            {
-                LOGGER.warn("############ THIS DATA UNIT ID HAS NOT BEEN VALIDATED FOR ELAPSED DIBIT COUNT: " + mCurrentDataUnitID);
-            }
-
-            //        log(nidMessage, mCurrentDataUnitID, nac, validNID);
-            System.out.println("\tValid NID Detected for NAC: " + nac + " DUID: " + mCurrentDataUnitID);
-            //Update the NAC tracker with the observed, correctly decoded NAC value.
-            mFineSync = true;
-            mMessageFramer.syncDetected(nac, mCurrentDataUnitID);
-        }
-        else
-        {
-            //Set the DUID to TDU to cause disable of fine sync at earliest message length.
-            mCurrentDataUnitID = P25P1DataUnitID.TERMINATOR_DATA_UNIT;
-            mMessageFramer.syncDetectedInvalidNID(trackedNAC);
+            return correction;
         }
 
-        return validNID;
+        correction.setNID(nac, duid);
+        return correction;
     }
 
     private static void log(CorrectedBinaryMessage a, P25P1DataUnitID duid, int nac, boolean corrected)
@@ -701,12 +673,98 @@ public class P25P1SoftSymbolProcessor
     }
 
     /**
-     * Correction candidate
-     * @param timing correction for symbol timing
-     * @param balance equalizer balance correction
-     * @param gain equalizer gain correction.
+     * Symbol timing and equalizer correction candidate settings
      */
-    public record Correction(double timing, float balance, float gain){};
+    public static class Correction
+    {
+        private double mTiming;
+        private float mBalance;
+        private float mGain;
+        private int mNAC;
+        private P25P1DataUnitID mDataUnitID;
+
+        /**
+         * Constructs an instance
+         * @param timing correction for symbol sampling
+         * @param balance correction for equalizer
+         * @param gain correction for equalizer
+         */
+        public Correction(double timing, float balance, float gain)
+        {
+            mTiming = timing;
+            mBalance = balance;
+            mGain = gain;
+        }
+
+        /**
+         * Timing correction value
+         * @return correction
+         */
+        public double getTiming()
+        {
+            return mTiming;
+        }
+
+        /**
+         * Equalizer balance correction value.
+         * @return correction
+         */
+        public float getBalance()
+        {
+            return mBalance;
+        }
+
+        /**
+         * Equalizer gain correction value
+         * @return correction.
+         */
+        public float getGain()
+        {
+            return mGain;
+        }
+
+        /**
+         * Sets the detected data unit ID.
+         * @param dataUnitID that was detected.
+         */
+        public void setNID(int nac, P25P1DataUnitID dataUnitID)
+        {
+            mNAC = nac;
+            mDataUnitID = dataUnitID;
+        }
+
+        /**
+         * Detected data unit ID
+         * @return data unit ID
+         */
+        public P25P1DataUnitID getDataUnitID()
+        {
+            return mDataUnitID;
+        }
+
+        public int getNAC()
+        {
+            return mNAC;
+        }
+
+        /**
+         * Indicates if this correction has valid timing and equalizer information.
+         * @return true if the timing correction is not the default (ie no timing) double max value.
+         */
+        public boolean hasValidTiming()
+        {
+            return getTiming() != Double.MAX_VALUE;
+        }
+
+        /**
+         * Indicates if this correct is valid and has a non-null detected data unit ID.
+         * @return true if valid.
+         */
+        public boolean isValid()
+        {
+            return mDataUnitID != null;
+        }
+    };
 
     /**
      * Base equalizer class
@@ -716,7 +774,11 @@ public class P25P1SoftSymbolProcessor
         protected boolean mInitialized = false;
         protected float mBalance = 0.0f;
         protected float mGain = 1.0f;
-        protected int mEqualizerExcessBalanceDetectCount;
+
+        /**
+         * Process the samples buffer to correct the balance and gain of the (copyLength) newest samples in the buffer.
+         * @param copyLength quantity of newly added samples in the buffer
+         */
         public abstract void process(int copyLength);
 
         /**
@@ -753,38 +815,24 @@ public class P25P1SoftSymbolProcessor
          */
         public void apply(Correction correction)
         {
-            if(Math.abs(correction.balance) > EQUALIZER_RECALIBRATE_THRESHOLD)
+            //Re-initialize the equalizer any time the balance correction value exceeds the threshold.
+            if(mInitialized && Math.abs(correction.getBalance()) > EQUALIZER_RECALIBRATE_THRESHOLD)
             {
-                mEqualizerExcessBalanceDetectCount++;
+                System.out.println("Equalizer - Excessive Balance Detected - Balance: " + DF.format(correction.getBalance()) + " Gain: " + DF.format(correction.getGain()));
+                mInitialized = false;
+            }
 
-                if(mEqualizerExcessBalanceDetectCount >= 2)
-                {
-                    System.out.println("*******************************\n\n EXCESS BALANCE DECTECTED \n\n****************************");
-                    System.out.println("Equalizer Balance: " + DF.format(correction.balance) + " Gain: " + DF.format(correction.gain));
-                    mInitialized = false;
-                    mEqualizerExcessBalanceDetectCount = 0;
-                }
+            //Limit equalizer adjustments using a control loop at each sync detect after the initial equalizer setup or
+            //apply as new settings on initial sync detect or any time an excess balance correction is supplied.
+            if(mInitialized)
+            {
+                mBalance += (correction.getBalance() * EQUALIZER_LOOP_GAIN);
+                mGain += (correction.getGain() * EQUALIZER_LOOP_GAIN);
             }
             else
             {
-                mEqualizerExcessBalanceDetectCount = 0;
-            }
-             if(mInitialized)
-            {
-                //Limit equalizer adjustments at each sync after the initial equalizer setup.
-                //                mBalance += (balanceAccumulator * EQUALIZER_LOOP_GAIN);
-                mBalance += (correction.balance * EQUALIZER_LOOP_GAIN);
-                mGain += (correction.gain * EQUALIZER_LOOP_GAIN);
-                //            System.out.println("Balance: " + DF.format(mEqualizerBalance) + " Gain: " + DF.format(mEqualizerGain) +
-                //                    " B-Acc: " + DF.format(balanceAccumulator) + " G-Acc: " + DF.format(gainAccumulator) +
-                //                    " B-Chg: " + DF.format(balanceAccumulator * EQUALIZER_LOOP_GAIN) +
-                //                    " G-Chg: " + DF.format(gainAccumulator * EQUALIZER_LOOP_GAIN));
-            }
-            else
-            {
-                mBalance += correction.balance;
-                mGain += correction.gain;
-                //            System.out.println("Balance: " + DF.format(mEqualizerBalance) + " Gain: " + DF.format(mEqualizerGain) + " B-Acc: " + DF.format(balanceAccumulator) + " G-Acc: " + DF.format(gainAccumulator));
+                mBalance += correction.getBalance();
+                mGain += correction.getGain();
             }
 
             //Constrain balance to +/- PI/4
@@ -797,8 +845,8 @@ public class P25P1SoftSymbolProcessor
 
             if(!mInitialized)
             {
-                //Apply the initial gain settings to the samples in the buffer so that the symbols can be resampled.
-                for(int x = 0; x < mBufferPointer; x++)
+                //Apply the initial gain settings to the remaining buffer samples to affect subsequent sampling
+                for(int x = 0; x < mBuffer.length; x++)
                 {
                     mBuffer[x] = (mBuffer[x] + mBalance) * mGain;
                 }
@@ -808,24 +856,24 @@ public class P25P1SoftSymbolProcessor
         }
 
         /**
-         * Calculates an update to the equalizer balance and gain when the sync pattern is detected in the sample
-         * buffer.  This method resamples the sync symbols and compares each soft symbol to the ideal symbol phase to
-         * develop average error measurements for balance and gain.  On initial sync detection, the equalizer settings
-         * are applied to the samples in the buffer allowing the symbols to be resampled during coarse sync acquisition.
+         * Calculates a correction update for the equalizer balance and gain when the sync pattern is detected in the
+         * sample buffer, using the supplied timing correction argument.  Resamples the sync symbols and compares each
+         * soft symbol to the ideal symbol phase to develop average error measurements for balance and gain.  On initial
+         * sync detection, the equalizer settings are applied to the samples in the buffer allowing the symbols to be
+         * resampled during coarse sync acquisition.
          */
-        public Correction update(double timingCorrection)
+        public Correction getCorrection(double timingCorrection)
         {
             double resampleStart = mBufferPointer + mSamplePoint + timingCorrection;
             int resampleStartIntegral = (int)Math.floor(resampleStart);
             float symbol = SYNC_PATTERN_SYMBOLS[23];
             float resampledSoftSymbol = LinearInterpolator.calculate(mBuffer[resampleStartIntegral],
                     mBuffer[resampleStartIntegral + 1], resampleStart - resampleStartIntegral);
-            float balanceAccumulator = resampledSoftSymbol - symbol;
-            float balancePlus3 = resampledSoftSymbol - symbol;
-            float balanceMinus3 = 0;
+            float balancePlus3Symbols = resampledSoftSymbol - symbol;
+            float balanceMinus3Symbols = 0;
             float gainAccumulator = Math.abs(symbol) - Math.abs(resampledSoftSymbol);
 
-            resampleStart -= (23 * mObservedSamplesPerSymbol); //Start at 89 (+ 1 current = 90) symbols
+            resampleStart -= (23 * mObservedSamplesPerSymbol);
             resampleStartIntegral = (int)Math.floor(resampleStart);
 
             for(int x = 0; x < 23; x++)
@@ -835,14 +883,14 @@ public class P25P1SoftSymbolProcessor
                     symbol = SYNC_PATTERN_SYMBOLS[x];
                     resampledSoftSymbol = LinearInterpolator.calculate(mBuffer[resampleStartIntegral],
                             mBuffer[resampleStartIntegral + 1], resampleStart - resampleStartIntegral);
-                    balanceAccumulator += resampledSoftSymbol - symbol;
+
                     if(symbol > 0)
                     {
-                        balancePlus3 += (resampledSoftSymbol - symbol);
+                        balancePlus3Symbols += (resampledSoftSymbol - symbol);
                     }
                     else
                     {
-                        balanceMinus3 += (resampledSoftSymbol - symbol);
+                        balanceMinus3Symbols += (resampledSoftSymbol - symbol);
                     }
 
                     gainAccumulator += Math.abs(symbol) - Math.abs(resampledSoftSymbol);
@@ -852,13 +900,10 @@ public class P25P1SoftSymbolProcessor
                 resampleStartIntegral = (int)Math.floor(resampleStart);
             }
 
-            //Average the accumulated error over 24 sync symbols
-            balanceAccumulator /= -24.0f;
-
-            balancePlus3 /= -11.0f; //There are 11x Plus 3 and 13x Minus 3 symbols in the sync pattern.
-            balanceMinus3 /= -13.0f;
-            float balanceAverage = (balancePlus3 + balanceMinus3) / 2f;
-            System.out.println("Balance [" + balanceAccumulator + "] Plus3 [" + balancePlus3 + "] Minus3 [" + balanceMinus3 + "] Average [" + balanceAverage + "]");
+            balancePlus3Symbols /= -11.0f; //There are 11x Plus 3 and 13x Minus 3 symbols in the sync pattern.
+            balanceMinus3Symbols /= -13.0f;
+            float balanceAverage = (balancePlus3Symbols + balanceMinus3Symbols) / 2f;
+            System.out.println("Balance [" + balanceAverage + "] Plus3 [" + balancePlus3Symbols + "] Minus3 [" + balanceMinus3Symbols + "]");
             gainAccumulator /= (24.0f * Dibit.D01_PLUS_3.getIdealPhase());
 
             return new Correction(timingCorrection, balanceAverage, gainAccumulator);
@@ -873,7 +918,7 @@ public class P25P1SoftSymbolProcessor
         @Override
         public void process(int copyLength)
         {
-            for(int x = mBufferLoadPointer - copyLength; x < mBufferLoadPointer; x++)
+            for(int x = mBuffer.length - copyLength; x < mBuffer.length; x++)
             {
                 //Unwrap phases
                 if(mBuffer[x - 1] > 1.5f && mBuffer[x] < -1.5f)
@@ -906,7 +951,7 @@ public class P25P1SoftSymbolProcessor
         @Override
         public void process(int copyLength)
         {
-            for(int x = mBufferLoadPointer - copyLength; x < mBufferLoadPointer; x++)
+            for(int x = mBuffer.length - copyLength; x < mBuffer.length; x++)
             {
                 //Apply equalizer adjustments
                 mBuffer[x] += mBalance;
@@ -919,17 +964,5 @@ public class P25P1SoftSymbolProcessor
                 mBuffer[x] = Math.max(mBuffer[x], SOFT_SYMBOL_MAX_NEGATIVE_PHASE);
             }
         }
-    }
-
-    static void main()
-    {
-        double[] s = new double[]{2.2646596, 2.376257, 2.4020972, 2.3868852, 2.3489807, 2.293533, 2.2039113, 1.914535, 0.32357034, 1.7023864, 2.197961, 2.2670896, 2.300842, 2.3264236, 2.3447568, 2.3503795, 2.3304927, 2.2351463, 1.3991193, 0.261054, 2.303139, 2.3558066, 2.342518, 2.3244324, 2.3102124, 2.3016934, 2.2970488, 2.2859178, 2.1841803, 0.026668489, 1.9531729, 2.2837346, 2.3302097, 2.3403783, 2.334687, 2.318292, 2.2930045, 2.255557, 2.1709278, 1.0924033, 0.55675375, 2.1811376, 2.280473, 2.3363507, 2.3927295, 2.4526892, 2.5105073, 2.5519621, 2.5401146, 2.267077, -0.2953683, -1.2436261, -2.0847025, -2.3790448, -2.4892468, -2.5463865, -2.5851789, -2.610502, -2.606251, -2.5115027, -2.105523, -2.5508661, 2.425252, 2.4801722, 2.4577172, 2.407239, 2.348917, 2.2928603, 2.2453144, 2.212419, 2.244208, -1.2654984, 2.5916674, 2.3814042, 2.396392, 2.4501975, 2.5217884, 2.6019921, 2.6833775, 2.7593985, 2.8404284, -2.2061656, -1.2051437, -1.9697014, -2.3342767, -2.4395044, -2.4648542, -2.4613245, -2.4431243, -2.408314, -2.3320532, -2.1102843, -1.5830822, -1.6340878, -2.0804286, -2.3050392, -2.4238448, -2.5083504, -2.5785418, -2.634445, -2.6595168, -2.6038218, -2.388157, -3.099742, 2.5971935, 2.5273414, 2.4710932, 2.4129627, 2.3580315, 2.3115516, 2.281592, 2.3014436, 2.7311323, -2.6483858, 2.7870836, 2.543695, 2.5041218, 2.5296564, 2.5909228, 2.6801958, 2.8003528, -3.3032951, -2.8920772, -1.8052965, -1.5979044, -2.0542157, -2.329488, -2.416012, -2.4345117, -2.429482, -2.4124885, -2.377544, -2.2951384, -2.0815763, -1.7188495, -1.8021612, -2.1538653, -2.3207576, -2.3808792, -2.3975399, -2.3922768, -2.3687527, -2.3146303, -2.182519, -1.8647058, -1.5685468, -1.8050231, -2.1176608, -2.274186, -2.3439224, -2.3707457, -2.371499, -2.350297, -2.2971125, -2.170418, -1.9331696, -1.8693593, -2.0717754, -2.2742288, -2.4370828, -2.583502, -2.7242517, -2.8573534, -2.9700365, -3.040701, -3.0833087, -3.269108, 2.752115, 2.6232533, 2.5944028, 2.6316366, 2.7238052, -3.4136977, -3.2044811, -2.8912184, -2.3961456, -1.9019454, -1.8328991, -2.0536032, -2.272393, -2.4322197, -2.5677028, -2.701907, -2.8407836, -2.9785936, -3.1010337, -3.1973162, -3.3058186, 2.8312902, 2.7224796, 2.6791313, 2.697456, 2.7748127, -3.3695638, -3.158972, -2.852725, -2.436537, -2.053236, -1.973826, -2.1374166, -2.2741237, -2.3301594, -2.346658, -2.3483891, -2.34122, -2.3181198, -2.259155, -2.1403153, -2.0284371, -2.0887396, -2.219416, -2.3012867, -2.3371215, -2.343586, -2.32661, -2.2810504, -2.1876824, -2.0136395, -1.783971, -1.7209476, -1.9227631, -2.1553013, -2.300848, -2.380974, -2.4212108, -2.4305947, -2.4049776, -2.3264973, -2.1672463, -1.9641122, -1.9347963, -2.1029239, -2.2338536, -2.2811224, -2.2847557, -2.2734122, -2.2606351, -2.2471707, -2.215411, -2.126466, -2.0072904, -2.0104525, -2.1323447, -2.0239475, -2.23187, -2.6735568};
-        float[] samples = new float[s.length];
-        for(int i = 0; i < s.length; i++)
-        {
-            samples[i] = (float)s[i];
-        }
-
-        double samplesPerSymbol = 50_000d / 4_800d;
     }
 }
