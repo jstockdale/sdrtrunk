@@ -34,14 +34,13 @@ import io.github.dsheirer.module.decode.p25.phase1.sync.P25P1SoftSyncDetector;
 import io.github.dsheirer.module.decode.p25.phase1.sync.P25P1SoftSyncDetectorFactory;
 import io.github.dsheirer.module.decode.p25.phase1.sync.P25P1SyncDetector;
 import io.github.dsheirer.sample.Listener;
-import org.apache.commons.math3.stat.descriptive.moment.StandardDeviation;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.nio.ByteBuffer;
 import java.text.DecimalFormat;
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
+import org.apache.commons.math3.stat.descriptive.moment.StandardDeviation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class P25P1SoftSymbolProcessor
 {
@@ -212,9 +211,11 @@ public class P25P1SoftSymbolProcessor
                         {
                             validateNID(correctionCandidate);
 
-                            if(correctionCandidate.isValid())
+                            int debugThreshold = 7_982_000;
+
+                            if(correctionCandidate.hasValidNID())
                             {
-                                //Apply correction values to timing and equalizer.
+                                //Apply candidate correction values to timing and equalizer.
                                 apply(correctionCandidate);
 
                                 //Overwrite the sync symbols in the symbol delay line
@@ -223,11 +224,12 @@ public class P25P1SoftSymbolProcessor
                                     mSymbolDelayLine.insert(syncSymbol);
                                 }
 
-                                System.out.println("VALID NID Correction Candidate: " +  correctionCandidate + " Samples [" + mDebugSampleCount + "] Symbols [" + mDebugSymbolCount + "]");
-                                System.out.println("\tValid NID Detected for NAC: " + correctionCandidate.getNAC() +
-                                        " DUID: " + correctionCandidate.getDataUnitID());
+                                System.out.println(correctionCandidate + " Samples [" + mDebugSampleCount +
+                                        "] Symbols [" + mDebugSymbolCount +
+                                        "] NAC [" + correctionCandidate.getNAC() +
+                                        "] DUID [" + correctionCandidate.getDataUnitID() + "]");
 
-                                if(mDebugSampleCount > 7_982_000)
+                                if(mDebugSampleCount > debugThreshold)
                                 {
                                     visualizeSyncDetect(0, true, "valid NID");
                                 }
@@ -237,9 +239,10 @@ public class P25P1SoftSymbolProcessor
                             }
                             else
                             {
-                                System.out.println("INVALID NID Correction Candidate: " +  correctionCandidate + " Samples [" + mDebugSampleCount + "] Symbols [" + mDebugSymbolCount + "]");
+                                System.out.println(correctionCandidate + " Samples [" + mDebugSampleCount +
+                                        "] Symbols [" + mDebugSymbolCount + "]");
 
-                                if(mDebugSampleCount > 7_982_000)
+                                if(mDebugSampleCount > debugThreshold)
                                 {
                                     visualizeSyncDetect(0, true, "*** JUNK NID DETECTED ***");
                                 }
@@ -597,6 +600,8 @@ public class P25P1SoftSymbolProcessor
             integral = (int) Math.floor(pointer);
             fractional = pointer - integral;
             softSymbol = LinearInterpolator.calculate(mBuffer[integral], mBuffer[integral + 1], fractional);
+
+//            softSymbol = (softSymbol + correction.getBalance()) * correction.getGain();
             symbol = toSymbol(softSymbol);
             resampledNIDSymbols[x] = symbol;
 
@@ -696,6 +701,34 @@ public class P25P1SoftSymbolProcessor
             mGain = gain;
         }
 
+        @Override
+        public String toString()
+        {
+            StringBuilder sb = new StringBuilder();
+
+            if(hasValidTiming())
+            {
+                sb.append("Correction - Timing [").append(mTiming);
+                sb.append("] Eq Balance [").append(mBalance);
+                sb.append("] Eq Gain [").append(mGain);
+
+                if(hasValidNID())
+                {
+                    sb.append("] NAC [").append(mNAC);
+                    sb.append("] DUID [").append(mDataUnitID.toString());
+                }
+                else
+                {
+                    sb.append("] INVALID NID");
+                }
+            }
+            else
+            {
+                sb.append("Correction - INVALID TIMING");
+            }
+            return sb.toString();
+        }
+
         /**
          * Timing correction value
          * @return correction
@@ -757,10 +790,10 @@ public class P25P1SoftSymbolProcessor
         }
 
         /**
-         * Indicates if this correct is valid and has a non-null detected data unit ID.
+         * Indicates if this correction is valid and has a non-null detected data unit ID from the NID.
          * @return true if valid.
          */
-        public boolean isValid()
+        public boolean hasValidNID()
         {
             return mDataUnitID != null;
         }
@@ -903,7 +936,7 @@ public class P25P1SoftSymbolProcessor
             balancePlus3Symbols /= -11.0f; //There are 11x Plus 3 and 13x Minus 3 symbols in the sync pattern.
             balanceMinus3Symbols /= -13.0f;
             float balanceAverage = (balancePlus3Symbols + balanceMinus3Symbols) / 2f;
-            System.out.println("Balance [" + balanceAverage + "] Plus3 [" + balancePlus3Symbols + "] Minus3 [" + balanceMinus3Symbols + "]");
+//            System.out.println("Balance [" + balanceAverage + "] Plus3 [" + balancePlus3Symbols + "] Minus3 [" + balanceMinus3Symbols + "]");
             gainAccumulator /= (24.0f * Dibit.D01_PLUS_3.getIdealPhase());
 
             return new Correction(timingCorrection, balanceAverage, gainAccumulator);
