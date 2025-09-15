@@ -97,7 +97,8 @@ public class P25P1MessageAssembler implements Listener<Dibit>
      */
     public void forceCompletion(P25P1DataUnitID previous, P25P1DataUnitID next)
     {
-        System.out.println("FORCING COMPLETION - PREV:" + previous + " CURRENT:" + mDataUnitID + " NEXT:" + next + " BITS:" + getMessage().currentSize());
+        int dropped = getMessage().currentSize() - getMessage().size();
+        System.out.println("FORCING COMPLETION - PREV:" + previous + " CURRENT:" + mDataUnitID + " NEXT:" + next + " RECEIVED BITS:" + getMessage().currentSize() + "/" + getMessage().size() + " (" + dropped + ")");
 
         //Debug ... for now
         if(mDataUnitID == P25P1DataUnitID.PLACEHOLDER)
@@ -230,6 +231,86 @@ public class P25P1MessageAssembler implements Listener<Dibit>
 //                mDataUnitID = P25P1DataUnitID.TRUNKING_SIGNALING_BLOCK_2;
 //            }
 //        }
+
+
+        //TODO: the below commented code should be married up to the forceCompletion on an assembler that is using the
+        // PLACEHOLDER duid value.
+        //        switch(mPreviousDUID)
+        //        {
+        //            case HEADER_DATA_UNIT:
+        //                if(!duid.isValidPrimaryDUID() && mPreviousMessageSymbolLength == 396) //Length of an HDU in symbols
+        //                {
+        //                    //This might be a stretch, but let's err on the side of voice.
+        //                    mPreviousDUID = P25P1DataUnitID.LOGICAL_LINK_DATA_UNIT_1;
+        //                    System.out.println("  (@-@) Corrected DUID from [" + duid.name() + "] to [" + mPreviousDUID.name() + "]  *****************");
+        //                }
+        //                else
+        //                {
+        //                    mSyncLock = duid.isValidPrimaryDUID();
+        //                    mPreviousDUID = duid;
+        //                }
+        //                break;
+        //            case LOGICAL_LINK_DATA_UNIT_1:
+        //                if(mPreviousMessageSymbolLength >= 845)
+        //                {
+        //                    //There should always be an LDU2 following an LDU1
+        //                    mPreviousDUID = P25P1DataUnitID.LOGICAL_LINK_DATA_UNIT_2;
+        //                    System.out.println("  (@-@) Corrected DUID from [" + duid.name() + "] to [" + mPreviousDUID.name() + "]  *****************");
+        //                }
+        //                else
+        //                {
+        //                    mSyncLock = duid.isValidPrimaryDUID();
+        //                    mPreviousDUID = duid;
+        //                }
+        //                break;
+        //            case LOGICAL_LINK_DATA_UNIT_2:
+        //                if(!duid.isValidPrimaryDUID() && mPreviousMessageSymbolLength >= 845)
+        //                {
+        //                    //Should be either an LDU1 or TDU ... set it to LDU1 and if not, message framer will revert it to TDU.
+        //                    mPreviousDUID = P25P1DataUnitID.LOGICAL_LINK_DATA_UNIT_1;
+        //                    mSyncLock = true;
+        //                    System.out.println("  (@-@) Corrected DUID from [" + duid.name() + "] to [" + mPreviousDUID.name() + "]  *****************");
+        //                }
+        //                else
+        //                {
+        //                    mSyncLock = duid.isValidPrimaryDUID();
+        //                    mPreviousDUID = duid;
+        //                }
+        //                break;
+        //            case TERMINATOR_DATA_UNIT:
+        //                if(!duid.isValidPrimaryDUID() && mPreviousMessageSymbolLength == 72)
+        //                {
+        //                    //If the previous message was a TDU and 72 symbols long, there's a good chance this is also a TDU
+        //                    mPreviousDUID = P25P1DataUnitID.TERMINATOR_DATA_UNIT;
+        //                    mSyncLock = true;
+        //                    System.out.println("  (@-@) Corrected DUID from [" + duid.name() + "] to [" + mPreviousDUID.name() + "]  *****************");
+        //                }
+        //                else
+        //                {
+        //                    mSyncLock = duid.isValidPrimaryDUID();
+        //                    mPreviousDUID = duid;
+        //                }
+        //                break;
+        //            case TRUNKING_SIGNALING_BLOCK_1:
+        //                System.out.println("  TSBK2/3 Detected - Continuing");
+        //                //Do nothing -
+        //                break;
+        //            default:
+        //                if(!duid.isValidPrimaryDUID() && mPreviousMessageSymbolLength == 72)
+        //                {
+        //                    //If the previous message was 72 symbols long (ie a TDU), there's a good chance this is also a TDU
+        //                    mPreviousDUID = P25P1DataUnitID.TERMINATOR_DATA_UNIT;
+        //                    System.out.println("  (@-@) Corrected DUID from [" + duid.name() + "] to [" + mPreviousDUID.name() + "]  *****************");
+        //                }
+        //                else
+        //                {
+        //                    //                        System.out.println("  No Correction - DUID [" + duid.name() + "] Previous [" + mPreviousDUID.name() + "]  *****************");
+        //                    mPreviousDUID = duid;
+        //                }
+        //                mSyncLock = false;
+        //                break;
+        //        }
+
     }
 
     /**

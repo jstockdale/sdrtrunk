@@ -33,7 +33,6 @@ import io.github.dsheirer.module.decode.p25.phase1.P25P1DataUnitID;
 import io.github.dsheirer.module.decode.p25.phase1.sync.P25P1SoftSyncDetector;
 import io.github.dsheirer.module.decode.p25.phase1.sync.P25P1SoftSyncDetectorFactory;
 import io.github.dsheirer.module.decode.p25.phase1.sync.P25P1SyncDetector;
-import io.github.dsheirer.module.decode.p25.phase2.enumeration.DataUnitID;
 import io.github.dsheirer.sample.Listener;
 import java.nio.ByteBuffer;
 import java.text.DecimalFormat;
@@ -85,7 +84,7 @@ public class P25P1SoftSymbolProcessor
     private int mBufferWorkspaceLength = 1024;
     private int mPreviousMessageSymbolLength;
     private P25P1DataUnitID mPreviousDataUnitID;
-    private int mSymbolsSinceLastSync = DIBIT_LENGTH_NID; //Set to NID length (72) to prevent false initial NID calculation.
+    private int mSymbolsSinceLastSync = 0;
     private final BCH_63_16_23_P25 mBCHDecoder = new BCH_63_16_23_P25();
     public static final IntField NAC_FIELD = IntField.length12(0);
     public static final IntField DUID_FIELD = IntField.length4(12);
@@ -118,9 +117,10 @@ public class P25P1SoftSymbolProcessor
      */
     public boolean receive(float[] samples)
     {
+        int debugVisualizeAfterSample = 0;
         boolean debugReturn = false;
         int samplesPointer = 0;
-        float softSymbol;
+        float softSymbol, scorePrimary;
         Dibit delayedSymbol;
         Correction correctionCandidate;
 
@@ -149,30 +149,18 @@ public class P25P1SoftSymbolProcessor
                     mSymbolsSinceLastSync++;
                     mDebugSymbolCount++;
 
-                    //Toggle assembling vs sync detection mode once the message framer stops assembling a message
-//                    if(mSyncDetectionMode ^ mMessageFramer.isAssembling())
-//                    {
-//                        mSyncDetectionMode = !mSyncDetectionMode;
-//
-//                        if(!mSyncDetectionMode)
-//                        {
-//                            System.out.println("TODO: enable the sync detection resets ...********************");
-////                            mSyncDetector.reset();
-////                            mSyncDetectorLag1.reset();
-////                            mSyncDetectorLag2.reset();
-//                        }
-//                    }
+                    softSymbol = LinearInterpolator.calculate(mBuffer[mBufferPointer], mBuffer[mBufferPointer + 1], mSamplePoint);
+                    delayedSymbol = mSymbolDelayLine.insert(toSymbol(softSymbol));
+                    mMessageFramer.receive(delayedSymbol);
+                    mDibitAssembler.receive(delayedSymbol);
 
                     String tag = "?";
-
-                    softSymbol = LinearInterpolator.calculate(mBuffer[mBufferPointer], mBuffer[mBufferPointer + 1], mSamplePoint);
-                    float scorePrimary = mSyncDetector.process(softSymbol);
-
+                    scorePrimary = mSyncDetector.process(softSymbol);
                     correctionCandidate = INVALID_SYNC_DETECTION;
 
                     if(mFineSync)
                     {
-                        if(scorePrimary > SYNC_THRESHOLD_DETECTION)
+                        if(mSymbolsSinceLastSync > 1 && scorePrimary > SYNC_THRESHOLD_DETECTION)
                         {
                             correctionCandidate = optimize(0);
                             tag = "FINE SYNC DETECTION - SCORE:" + scorePrimary;
@@ -216,12 +204,13 @@ public class P25P1SoftSymbolProcessor
                     {
                         validateNID(correctionCandidate);
 
-                        int debugThreshold = 8_233_900;
-
                         if(correctionCandidate.isValid())
                         {
                             //Apply candidate correction values to timing and equalizer.
                             apply(correctionCandidate);
+                            mMessageFramer.syncDetected(correctionCandidate.getNAC(), correctionCandidate.getDataUnitID());
+                            mFineSync = true;
+                            mSymbolsSinceLastSync = 0;
 
                             //Overwrite the sync symbols in the symbol delay line
                             for(Dibit syncSymbol: SYNC_PATTERN_DIBITS)
@@ -234,28 +223,25 @@ public class P25P1SoftSymbolProcessor
                                     "] NAC [" + correctionCandidate.getNAC() +
                                     "] DUID [" + correctionCandidate.getDataUnitID() + "]");
 
-                            if(mDebugSampleCount > debugThreshold)
+                            if(mDebugSampleCount > debugVisualizeAfterSample)
                             {
                                 visualizeSyncDetect(0, true, "valid NID " + tag);
                             }
 
-                            mFineSync = true;
-                            mMessageFramer.syncDetected(correctionCandidate.getNAC(), correctionCandidate.getDataUnitID());
                         }
                         else
                         {
                             System.out.println(correctionCandidate + " Samples [" + mDebugSampleCount +
                                     "] Symbols [" + mDebugSymbolCount + "]");
 
-                            if(mDebugSampleCount > debugThreshold)
+                            if(mDebugSampleCount > debugVisualizeAfterSample)
                             {
-                                visualizeSyncDetect(0, true, "*** JUNK NID *** " + tag + " OPTIMIZE SCORE:" + correctionCandidate.getOptimizationScore());
+                                visualizeSyncDetect(0, true, "*** INVALID SYNC DETECTION *** " + tag + " OPTIMIZE SCORE:" + correctionCandidate.getOptimizationScore());
                             }
                         }
 
                         mPreviousMessageSymbolLength = mSymbolsSinceLastSync;
                         mPreviousDataUnitID = correctionCandidate.getDataUnitID();
-                        mSymbolsSinceLastSync = 33;
                     }
 
                     if(mFineSync)
@@ -285,11 +271,6 @@ public class P25P1SoftSymbolProcessor
                             }
                         }
                     }
-
-                    //Calculate next symbol and get dibit from the delay line and feed the message framer and dibit assembler.
-                    delayedSymbol = mSymbolDelayLine.insert(toSymbol(getProjectedSoftSymbol()));
-                    mMessageFramer.receive(delayedSymbol);
-                    mDibitAssembler.receive(delayedSymbol);
 
                     //Add another symbol's worth of samples to the counter
                     mSamplePoint += mObservedSamplesPerSymbol;
@@ -716,7 +697,7 @@ public class P25P1SoftSymbolProcessor
             {
                 if(isValid())
                 {
-                    sb.append("CORRECTION - NAC [").append(mNAC);
+                    sb.append("\tCORRECTION - NAC [").append(mNAC);
                     sb.append("] DUID [").append(mDataUnitID.toString()).append("]");
                 }
                 else

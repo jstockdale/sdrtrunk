@@ -26,10 +26,10 @@ import java.util.EnumSet;
 public enum P25P1DataUnitID
 {
     HEADER_DATA_UNIT(0, 648, 396,true, "HDU  "),
-    TERMINATOR_DATA_UNIT(3, 28, 72, true, "TDU  "),
-    LOGICAL_LINK_DATA_UNIT_1(5, 1568, 864, true, "LDU1 "),
+    TERMINATOR_DATA_UNIT(3, 26, 72, false, "TDU  "),
+    LOGICAL_LINK_DATA_UNIT_1(5, 1568, 864, false, "LDU1 "),
     TRUNKING_SIGNALING_BLOCK_1(7, 248, 72, false, "TSBK1"),
-    LOGICAL_LINK_DATA_UNIT_2(10, 1568, 864, true, "LDU2 "),
+    LOGICAL_LINK_DATA_UNIT_2(10, 1568, 864, false, "LDU2 "),
     PACKET_DATA_UNIT(12, 196, 180, false, "PDU"),
     TERMINATOR_DATA_UNIT_LINK_CONTROL(15, 288, 216, true, "TDULC"),
 

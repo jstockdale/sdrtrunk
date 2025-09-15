@@ -47,13 +47,15 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
     private static final double MILLISECONDS_PER_SYMBOL = 1.0 / 4800.0 / 1000.0;
     private Listener<IMessage> mMessageListener;
     private boolean mRunning = false;
-    private int mDibitCounter = 0;
+    private int mDibitCounter = 58; //Set to 1-greater than SYNC+NID to avoid triggering message assembly on startup
     private int mDibitSinceTimestampCounter = 0;
-    private int mStatusSymbolDibitCounter = 0;
+    private int mStatusSymbolDibitCounter = 36; //Set to 1-greater than the suppression trigger at 35 dibits
     private int mTrailingDibitsToSuppress = 0;
     private long mReferenceTimestamp = 0;
     private P25P1MessageAssembler mMessageAssembler;
     private P25P1DataUnitID mPreviousDataUnitID = P25P1DataUnitID.PLACEHOLDER;
+    private P25P1DataUnitID mDetectedDataUnitID = P25P1DataUnitID.PLACEHOLDER;
+    private int mDetectedNAC = 0;
     private P25P1ChannelStatusProcessor mChannelStatusProcessor = new P25P1ChannelStatusProcessor();
     private PDUSequence mPDUSequence;
 
@@ -72,21 +74,26 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
             return;
         }
 
+        //String status symbol after every 35 dibits/70 bits.  This counter is reset to zero on sync detect and runs
+        //continuously even when we don't have a sync detect and not assembling a message.
+        mStatusSymbolDibitCounter++;
+
+        if(mStatusSymbolDibitCounter == 36)
+        {
+            if(mDetectedDataUnitID != P25P1DataUnitID.PLACEHOLDER)
+            {
+                //Send status dibit to channel status processor to identify ISP or OSP channel
+                mChannelStatusProcessor.receive(dibit);
+            }
+
+            mStatusSymbolDibitCounter = 0;
+            return;
+        }
+
         mDibitCounter ++;
 
         if(mMessageAssembler != null)
         {
-            //Strip out the status symbol dibit after every 70 bits or 35 dibits
-            if(mStatusSymbolDibitCounter == 35)
-            {
-                //Send status dibit to channel status processor to identify ISP or OSP channel
-                mChannelStatusProcessor.receive(dibit);
-                mStatusSymbolDibitCounter = 0;
-                mDibitCounter--;
-                return;
-            }
-
-            mStatusSymbolDibitCounter++;
             mMessageAssembler.receive(dibit);
 
             if(mMessageAssembler.isComplete())
@@ -94,7 +101,12 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
                 dispatchMessage();
             }
         }
-        else if(mDibitCounter >= 4800)
+        //Start a message assembler after ignoring 24x Sync and 32x NID dibits. Don't feed the 56th dibit to the assembler.
+        else if(mDibitCounter == 56)
+        {
+            mMessageAssembler = new P25P1MessageAssembler(mDetectedNAC, mDetectedDataUnitID);
+        }
+        else if(mDibitCounter >= 4857) //4800x (1-sec) + 57x to avoid triggering message assembly without a sync.
         {
             mDibitCounter -= 4800;
             broadcast(new SyncLossMessage(getTimestamp(), 9600, Protocol.APCO25));
@@ -109,7 +121,7 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
         //Note: the message assembler should have a valid DUID on it via the forceCompletion() method.  Capture the
         //current DUID as the previous, before the assembler is nullified.
         mPreviousDataUnitID = mMessageAssembler.getDataUnitID();
-        mDibitCounter -= mMessageAssembler.getMessage().currentSize() / 2;
+        mDibitCounter -= ((mMessageAssembler.getMessage().currentSize() / 2) + 57); //SYNC + NID + 1x STATUS + Message
 
         if(mMessageListener != null)
         {
@@ -130,8 +142,6 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
                     break;
                 case TERMINATOR_DATA_UNIT:
                     dispatchTDU();
-                    //Increment dibit counter by one since we sniped a sync dibit to eat the trailing status dibit
-                    mDibitCounter++;
                     break;
                 case TERMINATOR_DATA_UNIT_LINK_CONTROL:
                     dispatchTDULC();
@@ -553,165 +563,36 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
     }
 
     /**
-     * Externally provided trigger that a sync pattern is detected and the next arriving dibit is the start of the
-     * message that contains that sync.  This method is triggered when the NID following the sync was correctly verified
-     * via the BCH error correction and the NAC/DUID values are assumed to be correct.
+     * Externally provided trigger that a sync pattern is detected and the next arriving dibit is the first symbol of
+     * that detected sync.  This method is triggered when sync is detected and either:
+     * a) a valid NID is decoded from the look-ahead sample buffer or,
+     * b) the sync optimization process produces a high-quality correlation score
+     *
+     * When the trigger is option b, the DUID will be the PLACEHOLDER.
      *
      * @param nac value decoded from the NID.
      * @param dataUnitID decoded from the NID
      */
     public void syncDetected(int nac, P25P1DataUnitID dataUnitID)
     {
-        //Set the status symbol counter to 21 to account for NID dibits processed thus far.
-        mStatusSymbolDibitCounter = 21;
-        mDibitCounter -= 56; //Sync(48) + NID(64) = 56 dibits
+        mDetectedNAC = nac;
+        mDetectedDataUnitID = dataUnitID;
 
         //If there is a message assembler (still) active, force it to complete
         if(mMessageAssembler != null)
         {
-            mMessageAssembler.forceCompletion(mPreviousDataUnitID, dataUnitID);
+            mMessageAssembler.forceCompletion(mPreviousDataUnitID, mDetectedDataUnitID);
             dispatchMessage();
-        }
-
-        if(mDibitCounter < 0)
-        {
-            mDibitCounter = 0;
         }
 
         if(mDibitCounter > 0)
         {
             dispatchSyncLoss(mDibitCounter * 2);
-            mDibitCounter = 0;
         }
 
-        mMessageAssembler = new P25P1MessageAssembler(nac, dataUnitID);
-
-        StringBuilder debugSB = new StringBuilder();
-        debugSB.append("  --> Message Framer Sync Detect - NAC: ").append(nac);
-        debugSB.append(" Data Unit: ").append(dataUnitID);
-        debugSB.append(" DIBIT Counter: ").append(mDibitCounter);
-//        System.out.println(debugSB);
-    }
-
-    /**
-     * Indicates a valid sync was detected, but the NID didn't pass BCH error correction and therefore we're not certain
-     * of what DUID value to use.  In this case, we'll use the PLACEHOLDER DUID for the current DUID which has a message
-     * length that is long enough to capture any DUID.  Then, once the next sync is detected, we can inspect both the
-     * previous DUID, the next DUID, and the quantity of dibits captured for the unknown DUID that falls in between to
-     * make a best guess and process the message accordingly.  If the subsequent sync detect also has an invalid NID
-     * error correction, then we might abort guessing on the message that is closing out, unless the dibit count
-     * definitively correlates to a specific DUID message length.
-     * @param nac from previously decoded NID sync detections.
-     */
-    public void syncDetectedInvalidNID(int nac)
-    {
-        //Set the status symbol counter to 21 to account for NID dibits processed thus far.
-        mStatusSymbolDibitCounter = 21;
-        mDibitCounter -= 56; //Sync(48) + NID(64) = 56 dibits
-
-        if(mDibitCounter < 0)
-        {
-            mDibitCounter = 0;
-        }
-
-        if(mDibitCounter > 0)
-        {
-            dispatchSyncLoss(mDibitCounter * 2);
-            mDibitCounter = 0;
-        }
-
-        //If there is a message assembler (still) active, force it to complete
-        if(mMessageAssembler != null)
-        {
-            mMessageAssembler.forceCompletion(mPreviousDataUnitID, P25P1DataUnitID.PLACEHOLDER);
-            dispatchMessage();
-        }
-
-        System.out.println("Message Assembly Started with PLACEHOLDER");
-        mMessageAssembler = new P25P1MessageAssembler(nac, P25P1DataUnitID.PLACEHOLDER);
-
-
-
-
-        //TODO: the below commented code should be married up to the forceCompletion on an assembler that is using the
-        // PLACEHOLDER duid value.
-//        switch(mPreviousDUID)
-//        {
-//            case HEADER_DATA_UNIT:
-//                if(!duid.isValidPrimaryDUID() && mPreviousMessageSymbolLength == 396) //Length of an HDU in symbols
-//                {
-//                    //This might be a stretch, but let's err on the side of voice.
-//                    mPreviousDUID = P25P1DataUnitID.LOGICAL_LINK_DATA_UNIT_1;
-//                    System.out.println("  (@-@) Corrected DUID from [" + duid.name() + "] to [" + mPreviousDUID.name() + "]  *****************");
-//                }
-//                else
-//                {
-//                    mSyncLock = duid.isValidPrimaryDUID();
-//                    mPreviousDUID = duid;
-//                }
-//                break;
-//            case LOGICAL_LINK_DATA_UNIT_1:
-//                if(mPreviousMessageSymbolLength >= 845)
-//                {
-//                    //There should always be an LDU2 following an LDU1
-//                    mPreviousDUID = P25P1DataUnitID.LOGICAL_LINK_DATA_UNIT_2;
-//                    System.out.println("  (@-@) Corrected DUID from [" + duid.name() + "] to [" + mPreviousDUID.name() + "]  *****************");
-//                }
-//                else
-//                {
-//                    mSyncLock = duid.isValidPrimaryDUID();
-//                    mPreviousDUID = duid;
-//                }
-//                break;
-//            case LOGICAL_LINK_DATA_UNIT_2:
-//                if(!duid.isValidPrimaryDUID() && mPreviousMessageSymbolLength >= 845)
-//                {
-//                    //Should be either an LDU1 or TDU ... set it to LDU1 and if not, message framer will revert it to TDU.
-//                    mPreviousDUID = P25P1DataUnitID.LOGICAL_LINK_DATA_UNIT_1;
-//                    mSyncLock = true;
-//                    System.out.println("  (@-@) Corrected DUID from [" + duid.name() + "] to [" + mPreviousDUID.name() + "]  *****************");
-//                }
-//                else
-//                {
-//                    mSyncLock = duid.isValidPrimaryDUID();
-//                    mPreviousDUID = duid;
-//                }
-//                break;
-//            case TERMINATOR_DATA_UNIT:
-//                if(!duid.isValidPrimaryDUID() && mPreviousMessageSymbolLength == 72)
-//                {
-//                    //If the previous message was a TDU and 72 symbols long, there's a good chance this is also a TDU
-//                    mPreviousDUID = P25P1DataUnitID.TERMINATOR_DATA_UNIT;
-//                    mSyncLock = true;
-//                    System.out.println("  (@-@) Corrected DUID from [" + duid.name() + "] to [" + mPreviousDUID.name() + "]  *****************");
-//                }
-//                else
-//                {
-//                    mSyncLock = duid.isValidPrimaryDUID();
-//                    mPreviousDUID = duid;
-//                }
-//                break;
-//            case TRUNKING_SIGNALING_BLOCK_1:
-//                System.out.println("  TSBK2/3 Detected - Continuing");
-//                //Do nothing -
-//                break;
-//            default:
-//                if(!duid.isValidPrimaryDUID() && mPreviousMessageSymbolLength == 72)
-//                {
-//                    //If the previous message was 72 symbols long (ie a TDU), there's a good chance this is also a TDU
-//                    mPreviousDUID = P25P1DataUnitID.TERMINATOR_DATA_UNIT;
-//                    System.out.println("  (@-@) Corrected DUID from [" + duid.name() + "] to [" + mPreviousDUID.name() + "]  *****************");
-//                }
-//                else
-//                {
-//                    //                        System.out.println("  No Correction - DUID [" + duid.name() + "] Previous [" + mPreviousDUID.name() + "]  *****************");
-//                    mPreviousDUID = duid;
-//                }
-//                mSyncLock = false;
-//                break;
-//        }
-
-
+        //Set dibit counter to 0 -- we'll start a message assembler once we skip the SYNC and NID dibits at dibit count=57
+        mDibitCounter = 0;
+        mStatusSymbolDibitCounter = 0;
     }
 
     /**
