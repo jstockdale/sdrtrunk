@@ -21,6 +21,7 @@ package io.github.dsheirer.module.decode.p25.phase1.soft;
 
 import io.github.dsheirer.bits.CorrectedBinaryMessage;
 import io.github.dsheirer.dsp.symbol.Dibit;
+import io.github.dsheirer.message.DroppedSamplesMessage;
 import io.github.dsheirer.message.IMessage;
 import io.github.dsheirer.message.SyncLossMessage;
 import io.github.dsheirer.module.decode.p25.phase1.P25P1ChannelStatusProcessor;
@@ -47,6 +48,7 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
     private static final double MILLISECONDS_PER_SYMBOL = 1.0 / 4800.0 / 1000.0;
     private Listener<IMessage> mMessageListener;
     private boolean mRunning = false;
+    private boolean mMessageAssemblyRequired = false;
     private int mDibitCounter = 58; //Set to 1-greater than SYNC+NID to avoid triggering message assembly on startup
     private int mDibitSinceTimestampCounter = 0;
     private int mStatusSymbolDibitCounter = 36; //Set to 1-greater than the suppression trigger at 35 dibits
@@ -56,6 +58,7 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
     private P25P1DataUnitID mPreviousDataUnitID = P25P1DataUnitID.PLACEHOLDER;
     private P25P1DataUnitID mDetectedDataUnitID = P25P1DataUnitID.PLACEHOLDER;
     private int mDetectedNAC = 0;
+    private int mDetectedBitErrors = 0;
     private P25P1ChannelStatusProcessor mChannelStatusProcessor = new P25P1ChannelStatusProcessor();
     private PDUSequence mPDUSequence;
 
@@ -68,11 +71,11 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
     {
         mDibitSinceTimestampCounter++;
 
-        if(mTrailingDibitsToSuppress > 0)
-        {
-            mTrailingDibitsToSuppress--;
-            return;
-        }
+//        if(mTrailingDibitsToSuppress > 0)
+//        {
+//            mTrailingDibitsToSuppress--;
+//            return;
+//        }
 
         //String status symbol after every 35 dibits/70 bits.  This counter is reset to zero on sync detect and runs
         //continuously even when we don't have a sync detect and not assembling a message.
@@ -102,9 +105,10 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
             }
         }
         //Start a message assembler after ignoring 24x Sync and 32x NID dibits. Don't feed the 56th dibit to the assembler.
-        else if(mDibitCounter == 56)
+        else if(mMessageAssemblyRequired && mDibitCounter == 56)
         {
             mMessageAssembler = new P25P1MessageAssembler(mDetectedNAC, mDetectedDataUnitID);
+            mMessageAssemblyRequired = false;
         }
         else if(mDibitCounter >= 4857) //4800x (1-sec) + 57x to avoid triggering message assembly without a sync.
         {
@@ -121,7 +125,8 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
         //Note: the message assembler should have a valid DUID on it via the forceCompletion() method.  Capture the
         //current DUID as the previous, before the assembler is nullified.
         mPreviousDataUnitID = mMessageAssembler.getDataUnitID();
-        mDibitCounter -= ((mMessageAssembler.getMessage().currentSize() / 2) + 57); //SYNC + NID + 1x STATUS + Message
+
+//TODO: add the detected bit error count from the SYNC and NAC to the dispatched message ...
 
         if(mMessageListener != null)
         {
@@ -157,8 +162,21 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
         }
     }
 
+    /**
+     * Updates the dibit counter with the dibits collected on the current message before message assembler disposal.
+     */
+    private void adjustDibitCounterFromMessageAssembler()
+    {
+        if(mMessageAssembler != null)
+        {
+            mDibitCounter -= ((mMessageAssembler.getMessage().currentSize() / 2) + 56); //SYNC + NID + Message
+        }
+    }
+
     private void dispatchTDU()
     {
+        adjustDibitCounterFromMessageAssembler();
+
         CorrectedBinaryMessage cbm = mMessageAssembler.getMessage();
         P25P1Message message = P25MessageFactory.create(mMessageAssembler.getDataUnitID(), mMessageAssembler.getNAC(),
                 getTimestamp(), cbm);
@@ -174,11 +192,13 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
         }
 
         mMessageAssembler = null;
-        mTrailingDibitsToSuppress = 1;
     }
 
     private void dispatchTDULC()
     {
+        //      TODO: dibit accounting ..
+        //      adjustDibitCounterFromMessageAssembler();
+
         CorrectedBinaryMessage cbm = mMessageAssembler.getMessage();
         P25P1Message message = P25MessageFactory.create(mMessageAssembler.getDataUnitID(), mMessageAssembler.getNAC(),
                 getTimestamp(), cbm);
@@ -193,11 +213,7 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
             mMessageListener.receive(slm);
         }
 
-        System.out.println("** Setting TDULC message assembler to null");
-
         mMessageAssembler = null;
-
-        mTrailingDibitsToSuppress = 11;
     }
 
     /**
@@ -205,6 +221,8 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
      */
     private void dispatchOther()
     {
+        adjustDibitCounterFromMessageAssembler();
+
         CorrectedBinaryMessage cbm = mMessageAssembler.getMessage();
         P25P1Message message = P25MessageFactory.create(mMessageAssembler.getDataUnitID(), mMessageAssembler.getNAC(),
                 getTimestamp(), cbm);
@@ -246,6 +264,9 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
      */
     private void dispatchTSBK()
     {
+//      TODO: dibit accounting ..
+//      adjustDibitCounterFromMessageAssembler();
+
         int syncLossBits = 0;
 
         CorrectedBinaryMessage message = mMessageAssembler.getMessage();
@@ -361,6 +382,9 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
      */
     private void dispatchPDU()
     {
+        //      TODO: dibit accounting ..
+        //      adjustDibitCounterFromMessageAssembler();
+
         System.out.println("Dispatching PDU ... Message Length: " + mMessageAssembler.getMessage().currentSize() +
                 " DUID:" + mMessageAssembler.getDataUnitID());
 
@@ -572,17 +596,29 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
      *
      * @param nac value decoded from the NID.
      * @param dataUnitID decoded from the NID
+     * @param detectedBitErrors across the SYNc and NID
      */
-    public void syncDetected(int nac, P25P1DataUnitID dataUnitID)
+    public void syncDetected(int nac, P25P1DataUnitID dataUnitID, int detectedBitErrors)
     {
         mDetectedNAC = nac;
         mDetectedDataUnitID = dataUnitID;
+        mDetectedBitErrors = detectedBitErrors;
 
         //If there is a message assembler (still) active, force it to complete
         if(mMessageAssembler != null)
         {
-            mMessageAssembler.forceCompletion(mPreviousDataUnitID, mDetectedDataUnitID);
-            dispatchMessage();
+            if(mMessageAssembler.getDataUnitID() == P25P1DataUnitID.PLACEHOLDER)
+            {
+                //Don't send dropped samples message for placeholder since we had a bad NID decode.
+                mMessageAssembler.forceCompletion(mPreviousDataUnitID, mDetectedDataUnitID);
+                dispatchMessage();
+            }
+            else
+            {
+                int droppedBits = mMessageAssembler.forceCompletion(mPreviousDataUnitID, mDetectedDataUnitID);
+                broadcast(new DroppedSamplesMessage(getTimestamp(), droppedBits, Protocol.APCO25, 0));
+                dispatchMessage();
+            }
         }
 
         if(mDibitCounter > 0)
@@ -591,6 +627,7 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
         }
 
         //Set dibit counter to 0 -- we'll start a message assembler once we skip the SYNC and NID dibits at dibit count=57
+        mMessageAssemblyRequired = true;
         mDibitCounter = 0;
         mStatusSymbolDibitCounter = 0;
     }

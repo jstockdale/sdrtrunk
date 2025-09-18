@@ -48,7 +48,7 @@ public class P25P1SoftSymbolProcessor
     private static final LoggingSuppressor LOGGING_SUPPRESSOR = new LoggingSuppressor(LOGGER);
     private static final int DIBIT_LENGTH_NID = 33; //32 dibits (64 bits) +1 status
     private static final int DIBIT_LENGTH_SYNC = 24;
-    private static final Correction INVALID_SYNC_DETECTION = new Correction(Double.MAX_VALUE, 0f, 0f, 0f);
+    private static final Correction INVALID_SYNC_DETECTION = new Correction(Double.MAX_VALUE, 0f, 0f, 0f, 0);
     private static final float SOFT_SYMBOL_MAX_POSITIVE_PHASE = 3.5f;
     private static final float SOFT_SYMBOL_MAX_NEGATIVE_PHASE = -3.5f;
     private static final float SOFT_SYMBOL_QUADRANT_BOUNDARY = (float)(Math.PI / 2.0);
@@ -208,7 +208,7 @@ public class P25P1SoftSymbolProcessor
                         {
                             //Apply candidate correction values to timing and equalizer.
                             apply(correctionCandidate);
-                            mMessageFramer.syncDetected(correctionCandidate.getNAC(), correctionCandidate.getDataUnitID());
+                            mMessageFramer.syncDetected(correctionCandidate.getNAC(), correctionCandidate.getDataUnitID(), correctionCandidate.getCorrectedBitCount());
                             mFineSync = true;
                             mSymbolsSinceLastSync = 0;
 
@@ -605,6 +605,7 @@ public class P25P1SoftSymbolProcessor
         //If error correction fails, return the original correction candidate
         if(candidateNID.getCorrectedBitCount() < 0)
         {
+            correction.addCorrectedBitCount(candidateNID.getCorrectedBitCount());
             return correction;
         }
 
@@ -622,6 +623,7 @@ public class P25P1SoftSymbolProcessor
         }
 
         correction.setNID(nac, duid);
+        correction.addCorrectedBitCount(candidateNID.getCorrectedBitCount());
         return correction;
     }
 
@@ -667,25 +669,29 @@ public class P25P1SoftSymbolProcessor
      */
     public static class Correction
     {
+        private final DecimalFormat DECIMAL_FORMAT = new DecimalFormat("+0.00000;-0.00000");
         private double mTiming;
         private float mBalance;
         private float mGain;
         private float mOptimizationScore;
         private int mNAC;
         private P25P1DataUnitID mDataUnitID = P25P1DataUnitID.PLACEHOLDER;
+        private int mCorrectedBitCount = 0;
 
         /**
          * Constructs an instance
          * @param timing correction for symbol sampling
          * @param balance correction for equalizer
          * @param gain correction for equalizer
+         * @param bitErrorCount in the detected sync pattern
          */
-        public Correction(double timing, float balance, float gain, float optimizationScore)
+        public Correction(double timing, float balance, float gain, float optimizationScore, int bitErrorCount)
         {
             mTiming = timing;
             mBalance = balance;
             mGain = gain;
             mOptimizationScore = optimizationScore;
+            mCorrectedBitCount = bitErrorCount;
         }
 
         @Override
@@ -698,17 +704,18 @@ public class P25P1SoftSymbolProcessor
                 if(isValid())
                 {
                     sb.append("\tCORRECTION - NAC [").append(mNAC);
-                    sb.append("] DUID [").append(mDataUnitID.toString()).append("]");
+                    sb.append("] DUID [").append(mDataUnitID.toString());
+                    sb.append("] Bit Errors [").append(mCorrectedBitCount).append("]");
                 }
                 else
                 {
                     sb.append("CORRECTION - INVALID NID");
                 }
 
-                sb.append(" Timing [").append(mTiming);
+                sb.append(" Timing [").append(DECIMAL_FORMAT.format(mTiming));
                 sb.append("] Optimization Score [").append(mOptimizationScore);
-                sb.append("] Eq Balance [").append(mBalance);
-                sb.append("] Eq Gain [").append(mGain);
+                sb.append("] Eq Balance [").append(DECIMAL_FORMAT.format(mBalance));
+                sb.append("] Eq Gain [").append(DECIMAL_FORMAT.format(mGain));
 
             }
             else
@@ -762,6 +769,24 @@ public class P25P1SoftSymbolProcessor
         {
             mNAC = nac;
             mDataUnitID = dataUnitID;
+        }
+
+        /**
+         * Adds to the bit error count with the number of bit errors corrected in the NID by the BCH decoder
+         * @param correctedBitCount for the corrected NID
+         */
+        public void addCorrectedBitCount(int correctedBitCount)
+        {
+            mCorrectedBitCount += correctedBitCount;
+        }
+
+        /**
+         * Number of bits that were corrected across the SYNC and NID
+         * @return corrected bit count.
+         */
+        public int getCorrectedBitCount()
+        {
+            return mCorrectedBitCount;
         }
 
         /**
@@ -904,6 +929,7 @@ public class P25P1SoftSymbolProcessor
             float balancePlus3Symbols = resampledSoftSymbol - symbol;
             float balanceMinus3Symbols = 0;
             float gainAccumulator = Math.abs(symbol) - Math.abs(resampledSoftSymbol);
+            int bitErrorCount = 0;
 
             resampleStart -= (23 * mObservedSamplesPerSymbol);
             resampleStartIntegral = (int)Math.floor(resampleStart);
@@ -915,6 +941,9 @@ public class P25P1SoftSymbolProcessor
                     symbol = SYNC_PATTERN_SYMBOLS[x];
                     resampledSoftSymbol = LinearInterpolator.calculate(mBuffer[resampleStartIntegral],
                             mBuffer[resampleStartIntegral + 1], resampleStart - resampleStartIntegral);
+
+                    Dibit resampledDibit = toSymbol(resampledSoftSymbol);
+                    bitErrorCount += SYNC_PATTERN_DIBITS[x].getBitErrorFrom(resampledDibit);
 
                     if(symbol > 0)
                     {
@@ -938,7 +967,7 @@ public class P25P1SoftSymbolProcessor
 //            System.out.println("Balance [" + balanceAverage + "] Plus3 [" + balancePlus3Symbols + "] Minus3 [" + balanceMinus3Symbols + "]");
             gainAccumulator /= (24.0f * Dibit.D01_PLUS_3.getIdealPhase());
 
-            return new Correction(timingCorrection, balanceAverage, gainAccumulator, optimizationScore);
+            return new Correction(timingCorrection, balanceAverage, gainAccumulator, optimizationScore, bitErrorCount);
         }
     }
 

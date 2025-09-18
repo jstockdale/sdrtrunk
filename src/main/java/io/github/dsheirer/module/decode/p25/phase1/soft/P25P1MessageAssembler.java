@@ -40,6 +40,7 @@ public class P25P1MessageAssembler implements Listener<Dibit>
 {
     private static final Logger LOGGER = LoggerFactory.getLogger(P25P1MessageAssembler.class);
     private static final LoggingSuppressor LOGGING_SUPPRESSOR = new LoggingSuppressor(LOGGER);
+    private static final int MINIMUM_LDU_BIT_LENGTH = 1500; //actual length is 1568
     private CorrectedBinaryMessage mMessage;
     private P25P1DataUnitID mDataUnitID;
     private int mNac;
@@ -63,15 +64,15 @@ public class P25P1MessageAssembler implements Listener<Dibit>
         //If the DUID has a trailing status bit, set the message length to 2-bits longer so that we consume the status
         //bit.  This causes the message to have the first 2-bits of the next sync pattern to be appended to the end of
         //the message, but that won't impact anything.
-        if(duid.hasTrailingStatusDibit())
-        {
-            length += 2;
-        }
+//        if(duid.hasTrailingStatusDibit())
+//        {
+//            length += 2;
+//        }
 
         if(length < 0)
         {
             length = 0;
-            System.out.println("Negative message length [" + length + "]  duid [" + duid.toString() + "]");
+            System.out.println("Negative message length [" + length + "]  duid [" + duid + "]");
         }
 
         mMessage = new CorrectedBinaryMessage(length);
@@ -94,11 +95,13 @@ public class P25P1MessageAssembler implements Listener<Dibit>
      * decoded, or updating the data unit ID based on the quantity of dibits assembled thus far.
      * @param previous data unit ID for the message prior to the currently assembled message
      * @param next data unit ID for the message that will be assembled next
+     * @return number of bits that were dropped.
      */
-    public void forceCompletion(P25P1DataUnitID previous, P25P1DataUnitID next)
+    public int forceCompletion(P25P1DataUnitID previous, P25P1DataUnitID next)
     {
-        int dropped = getMessage().currentSize() - getMessage().size();
-        System.out.println("FORCING COMPLETION - PREV:" + previous + " CURRENT:" + mDataUnitID + " NEXT:" + next + " RECEIVED BITS:" + getMessage().currentSize() + "/" + getMessage().size() + " (" + dropped + ")");
+        int droppedBits = getMessage().currentSize() - getMessage().size();
+
+        System.out.println("FORCING COMPLETION - PREV:" + previous + " CURRENT:" + mDataUnitID + " NEXT:" + next + " RECEIVED BITS:" + getMessage().currentSize() + "/" + getMessage().size() + " (" + droppedBits + ")");
 
         //Debug ... for now
         if(mDataUnitID == P25P1DataUnitID.PLACEHOLDER)
@@ -113,14 +116,14 @@ public class P25P1MessageAssembler implements Listener<Dibit>
                         System.out.println("** FORCING COMPLETION TO HDU");
                         mDataUnitID = P25P1DataUnitID.HEADER_DATA_UNIT;
                     }
-                    else if(length >= 1566) //Should be 1568
+                    else if(length >= MINIMUM_LDU_BIT_LENGTH)
                     {
                         System.out.println("** FORCING COMPLETION TO LDU2");
                         mDataUnitID = P25P1DataUnitID.LOGICAL_LINK_DATA_UNIT_2;
                     }
                     break;
                 case LOGICAL_LINK_DATA_UNIT_2:
-                    if(length >= 1566) //Should be 1568
+                    if(length >= MINIMUM_LDU_BIT_LENGTH)
                     {
                         System.out.println("** FORCING COMPLETION TO LDU1");
                         mDataUnitID = P25P1DataUnitID.LOGICAL_LINK_DATA_UNIT_1;
@@ -133,14 +136,14 @@ public class P25P1MessageAssembler implements Listener<Dibit>
                 switch(previous)
                 {
                     case LOGICAL_LINK_DATA_UNIT_1:
-                        if(length >= 1566) //Should be 1568
+                        if(length >= MINIMUM_LDU_BIT_LENGTH)
                         {
                             System.out.println("** FORCING COMPLETION TO LDU2");
                             mDataUnitID = P25P1DataUnitID.LOGICAL_LINK_DATA_UNIT_2;
                         }
                         break;
                     case LOGICAL_LINK_DATA_UNIT_2:
-                        if(length >= 1566) //Should be 1568
+                        if(length >= MINIMUM_LDU_BIT_LENGTH)
                         {
                             System.out.println("** FORCING COMPLETION TO LDU1");
                             mDataUnitID = P25P1DataUnitID.LOGICAL_LINK_DATA_UNIT_1;
@@ -311,6 +314,7 @@ public class P25P1MessageAssembler implements Listener<Dibit>
         //                break;
         //        }
 
+        return droppedBits;
     }
 
     /**
