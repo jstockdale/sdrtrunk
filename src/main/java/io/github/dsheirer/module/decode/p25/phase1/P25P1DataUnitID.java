@@ -28,9 +28,9 @@ public enum P25P1DataUnitID
     HEADER_DATA_UNIT(0, 648 + 10, 396,true, "HDU  "),
     TERMINATOR_DATA_UNIT(3, 28, 72, false, "TDU  "),
     LOGICAL_LINK_DATA_UNIT_1(5, 1568, 864, false, "LDU1 "),
-    TRUNKING_SIGNALING_BLOCK_1(7, 248, 72, false, "TSBK1"),
+    TRUNKING_SIGNALING_BLOCK_1(7, 238, 72, false, "TSBK1"),
     LOGICAL_LINK_DATA_UNIT_2(10, 1568, 864, false, "LDU2 "),
-    PACKET_DATA_UNIT(12, 196, 180, false, "PDU"),
+    PACKET_DATA_UNIT(12, 238, 180, false, "PDU"),
     TERMINATOR_DATA_UNIT_LINK_CONTROL(15, 288, 216, true, "TDULC"),
 
     //Set to length of LDU plus sync/nid so that next sync detect can force it to a best guess
@@ -39,14 +39,14 @@ public enum P25P1DataUnitID
     //The following are not true data unit identifiers, rather they are used as identifiers
     ALTERNATE_MULTI_BLOCK_TRUNKING_CONTROL(-1, -1, 72, false, "AMBTC"),
     IP_PACKET_DATA(-1, 0, 72, false, "IPPKT"),
-    PACKET_DATA_UNIT_BLOCK_1(-1, 196, 288, false, "PDU"),
-    PACKET_DATA_UNIT_BLOCK_2(-1, 196, 334, false, "PDU"),
-    PACKET_DATA_UNIT_BLOCK_3(-1, 196, 468, false, "PDU"),
-    PACKET_DATA_UNIT_BLOCK_4(-1, 196, 534, false, "PDU"),
-    PACKET_DATA_UNIT_BLOCK_5(-1, 196, 634, false, "PDU"),
+    PACKET_DATA_UNIT_BLOCK_1(-1, 448, 288, false, "PDU"),
+    PACKET_DATA_UNIT_BLOCK_2(-1, 588, 334, false, "PDU"),
+    PACKET_DATA_UNIT_BLOCK_3(-1, 798, 468, false, "PDU"),
+    PACKET_DATA_UNIT_BLOCK_4(-1, 1008, 534, false, "PDU"),
+    PACKET_DATA_UNIT_BLOCK_5(-1, 1218, 634, false, "PDU"),
     SUBNETWORK_DEPENDENT_CONVERGENCE_PROTOCOL(-1, 0, 72, false, "SNDCP"),
-    TRUNKING_SIGNALING_BLOCK_2(7, 464, 72, false, "TSBK2"),
-    TRUNKING_SIGNALING_BLOCK_3(7, 720, 72, false, "TSBK3"),
+    TRUNKING_SIGNALING_BLOCK_2(7, 448, 72, false, "TSBK2"),
+    TRUNKING_SIGNALING_BLOCK_3(7, 588, 72, false, "TSBK3"),
     UNCONFIRMED_MULTI_BLOCK_TRUNKING_CONTROL(-1, -1, 72, false, "UMBTC"),
 
     UNKNOWN(-1, -1, 72, false, "UNKNOWN");

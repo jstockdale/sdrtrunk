@@ -92,7 +92,6 @@ public class P25P1SoftSymbolProcessor
     private int mDebugSymbolCount;
     private long mDebugSampleCount = 0;
     private long mDebugSymbolCountLastDetect = 0;
-    private P25P1DataUnitID mCurrentDataUnitID = P25P1DataUnitID.UNKNOWN;
     private double mNoiseStandardDeviationThreshold;
     private float mOptimizeFineIncrement;
     private SyncResultsViewer mSyncResultsViewer;
@@ -244,33 +243,8 @@ public class P25P1SoftSymbolProcessor
                         mPreviousDataUnitID = correctionCandidate.getDataUnitID();
                     }
 
-                    if(mFineSync)
-                    {
-                        if(mSymbolsSinceLastSync > 180 && mMessageFramer.isAssembling() && mCurrentDataUnitID != mMessageFramer.getAssemblingDUID())
-                        {
-                            //                        System.out.println("*** MESSAGE ASSEMBLER PIVOT TO [" + mMessageFramer.getAssemblingDUID() + "] at Elapsed [" + mSymbolsSinceLastSync + "]");
-                            mCurrentDataUnitID = mMessageFramer.getAssemblingDUID();
-                        }
-
-                        if(mSymbolsSinceLastSync > (mCurrentDataUnitID.getElapsedDibitLength()))
-                        {
-                            if(mMessageFramer.isAssembling())
-                            {
-                                //                            System.out.println("Elapsed [" + mSymbolsSinceLastSync + "] symbols exceeds expected [" +
-                                //                                    mCurrentDataUnitID.getElapsedDibitLength() + "] current [" + mCurrentDataUnitID +
-                                //                                    "] changing to [" + mMessageFramer.getAssemblingDUID() +
-                                //                                    "] new elapsed [" + mMessageFramer.getAssemblingDUID().getElapsedDibitLength() + "]");
-                                mCurrentDataUnitID = mMessageFramer.getAssemblingDUID();
-                            }
-                            else if(mSymbolsSinceLastSync > (mCurrentDataUnitID.getElapsedDibitLength()))
-                            {
-                                //                            System.out.println("Elapsed [" + mSymbolsSinceLastSync + "] symbols exceeds expected [" +
-                                //                                    mCurrentDataUnitID.getElapsedDibitLength() + "] for [" + mCurrentDataUnitID +
-                                //                                    "] message framer is no longer assembling #### SETTING FINE SYNC TO FALSE #### At Symbol [" + mDebugSymbolCount + "]");
-                                mFineSync = false;
-                            }
-                        }
-                    }
+                    //Continue with fine sync as long as the message framer is assembling or about to assemble.
+                    mFineSync = mMessageFramer.isAssembling();
 
                     //Add another symbol's worth of samples to the counter
                     mSamplePoint += mObservedSamplesPerSymbol;
@@ -318,28 +292,6 @@ public class P25P1SoftSymbolProcessor
     }
 
     /**
-     * Indicates if the samples in the sample buffer that contain a detected sync pattern have a standard deviation
-     * that is lower than the expected sample to sample deviation for a modulated signal.  False detects against
-     * noise tend to have a standard deviation that is 2x the expected value.
-     * @param offset to the sample representing the final symbol in the detected sync pattern.
-     * @return true if the standard deviation is more than expected.
-     */
-    private boolean isNoisy(double offset)
-    {
-        StandardDeviation standardDeviation = new StandardDeviation();
-        int start = (int)Math.floor(offset - (23 * mObservedSamplesPerSymbol));
-        int end = (int)Math.ceil(offset);
-        end = Math.min(end, mBuffer.length - 1);
-
-        for(int i = start; i < end; i++)
-        {
-            standardDeviation.increment(mBuffer[i] - mBuffer[i + 1]);
-        }
-
-        return standardDeviation.getResult() > mNoiseStandardDeviationThreshold;
-    }
-
-    /**
      * On sync detection, calculates the optimal timing adjustment that achieves the highest sync correlation score or
      * returns an INVALID_SYNC_DETECTION sentinel value if the correlation score doesn't exceed the threshold.
      * @param additionalOffset from current mBufferPointer and mSamplePoint.  This can be zero offset for the primary
@@ -353,7 +305,7 @@ public class P25P1SoftSymbolProcessor
         double offset = mBufferPointer + mSamplePoint + additionalOffset;
 
         //Reject any sync detections where the sample:sample standard deviation exceeds the noise threshold.
-        if(isNoisy(offset))
+        if(mEqualizer.isNoisy(offset))
         {
             return INVALID_SYNC_DETECTION;
         }
@@ -369,13 +321,13 @@ public class P25P1SoftSymbolProcessor
         double adjustmentMax = mFineSync ? mSamplesPerSymbol : (mSamplesPerSymbol / 2.0);
         double candidate = offset;
 
-        float scoreCenter = score(candidate, mObservedSamplesPerSymbol);
+        float scoreCenter = mEqualizer.score(candidate, mObservedSamplesPerSymbol);
 
         candidate = offset - stepSize;
-        float scoreLeft = score(candidate, mObservedSamplesPerSymbol);
+        float scoreLeft = mEqualizer.score(candidate, mObservedSamplesPerSymbol);
 
         candidate = offset + stepSize;
-        float scoreRight = score(candidate, mObservedSamplesPerSymbol);
+        float scoreRight = mEqualizer.score(candidate, mObservedSamplesPerSymbol);
 
         while(stepSize > stepSizeMin && Math.abs(adjustment) <= adjustmentMax)
         {
@@ -386,7 +338,7 @@ public class P25P1SoftSymbolProcessor
                 scoreCenter = scoreLeft;
 
                 candidate = offset + adjustment - stepSize;
-                scoreLeft = score(candidate, mObservedSamplesPerSymbol);
+                scoreLeft = mEqualizer.score(candidate, mObservedSamplesPerSymbol);
             }
             else if(scoreRight > scoreLeft && scoreRight > scoreCenter)
             {
@@ -395,7 +347,7 @@ public class P25P1SoftSymbolProcessor
                 scoreCenter = scoreRight;
 
                 candidate = offset + adjustment + stepSize;
-                scoreRight = score(candidate, mObservedSamplesPerSymbol);
+                scoreRight = mEqualizer.score(candidate, mObservedSamplesPerSymbol);
             }
             else
             {
@@ -404,10 +356,10 @@ public class P25P1SoftSymbolProcessor
                 if(stepSize > stepSizeMin)
                 {
                     candidate = offset + adjustment - stepSize;
-                    scoreLeft = score(candidate, mObservedSamplesPerSymbol);
+                    scoreLeft = mEqualizer.score(candidate, mObservedSamplesPerSymbol);
 
                     candidate = offset + adjustment + stepSize;
-                    scoreRight = score(candidate, mObservedSamplesPerSymbol);
+                    scoreRight = mEqualizer.score(candidate, mObservedSamplesPerSymbol);
                 }
             }
         }
@@ -423,43 +375,6 @@ public class P25P1SoftSymbolProcessor
         adjustment += additionalOffset;
 
         return mEqualizer.getCorrection(adjustment, scoreCenter);
-    }
-
-    /**
-     * Calculates the sync correlation score at the specified offset and samples per symbol interval.
-     * @param offset to the final symbol in the soft symbol buffer
-     * @param samplesPerSymbol spacing to test for.
-     * @return correlation score.
-     */
-    public float score(double offset, double samplesPerSymbol)
-    {
-        int maxPointer = mBuffer.length - 1;
-        float softSymbol;
-
-        double pointer = offset - (samplesPerSymbol * 23.0);
-        int bufferPointer = (int)Math.floor(pointer);
-        double fractional = pointer - bufferPointer;
-
-        float score = 0;
-
-        for(int x = 0; x < 24; x++)
-        {
-            if(bufferPointer < maxPointer)
-            {
-                softSymbol = LinearInterpolator.calculate(mBuffer[bufferPointer], mBuffer[bufferPointer + 1], fractional);
-            }
-            else
-            {
-                softSymbol = 0.0f;
-            }
-
-            score += softSymbol * SYNC_PATTERN_SYMBOLS[x];
-            pointer += samplesPerSymbol;
-            bufferPointer = (int)Math.floor(pointer);
-            fractional = pointer - bufferPointer;
-        }
-
-        return score;
     }
 
     /**
@@ -838,6 +753,21 @@ public class P25P1SoftSymbolProcessor
         public abstract void process(int copyLength);
 
         /**
+         * Process the samples buffer to detect if the deviation between symbols exceeds a threshold.
+         * @param offset into the sample buffer to the last symbol.
+         * @return true if noisy
+         */
+        public abstract boolean isNoisy(double offset);
+
+        /**
+         * Calculates the sync correlation score at the specified offset and samples per symbol interval.
+         * @param offset to the final symbol in the soft symbol buffer
+         * @param samplesPerSymbol spacing to test for.
+         * @return correlation score.
+         */
+        public abstract float score(double offset, double samplesPerSymbol);
+
+        /**
          * Indicates if this equalizer is initialized, meaning it has processed at least 1x sync detection to establish
          * initial gain and balance values.
          * @return true if initialized.
@@ -976,6 +906,28 @@ public class P25P1SoftSymbolProcessor
      */
     class C4FMEqualizer extends Equalizer
     {
+        /**
+         * Indicates if the samples in the sample buffer that contain a detected sync pattern have a standard deviation
+         * that is lower than the expected sample to sample deviation for a modulated signal.  False detects against
+         * noise tend to have a standard deviation that is 2x the expected value.
+         * @param offset to the sample representing the final symbol in the detected sync pattern.
+         * @return true if the standard deviation is more than expected.
+         */
+        public boolean isNoisy(double offset)
+        {
+            StandardDeviation standardDeviation = new StandardDeviation();
+            int start = (int)Math.floor(offset - (23 * mObservedSamplesPerSymbol));
+            int end = (int)Math.ceil(offset);
+            end = Math.min(end, mBuffer.length - 1);
+
+            for(int i = start; i < end; i++)
+            {
+                standardDeviation.increment(mBuffer[i] - mBuffer[i + 1]);
+            }
+
+            return standardDeviation.getResult() > mNoiseStandardDeviationThreshold;
+        }
+
         @Override
         public void process(int copyLength)
         {
@@ -1002,6 +954,43 @@ public class P25P1SoftSymbolProcessor
                 mBuffer[x] = Math.max(mBuffer[x], SOFT_SYMBOL_MAX_NEGATIVE_PHASE);
             }
         }
+
+        /**
+         * Calculates the sync correlation score at the specified offset and samples per symbol interval.
+         * @param offset to the final symbol in the soft symbol buffer
+         * @param samplesPerSymbol spacing to test for.
+         * @return correlation score.
+         */
+        public float score(double offset, double samplesPerSymbol)
+        {
+            int maxPointer = mBuffer.length - 1;
+            float softSymbol;
+
+            double pointer = offset - (samplesPerSymbol * 23.0);
+            int bufferPointer = (int)Math.floor(pointer);
+            double fractional = pointer - bufferPointer;
+
+            float score = 0;
+
+            for(int x = 0; x < 24; x++)
+            {
+                if(bufferPointer < maxPointer)
+                {
+                    softSymbol = LinearInterpolator.calculate(mBuffer[bufferPointer], mBuffer[bufferPointer + 1], fractional);
+                }
+                else
+                {
+                    softSymbol = 0.0f;
+                }
+
+                score += softSymbol * SYNC_PATTERN_SYMBOLS[x];
+                pointer += samplesPerSymbol;
+                bufferPointer = (int)Math.floor(pointer);
+                fractional = pointer - bufferPointer;
+            }
+
+            return score;
+        }
     }
 
     /**
@@ -1024,6 +1013,73 @@ public class P25P1SoftSymbolProcessor
                 mBuffer[x] = Math.min(mBuffer[x], SOFT_SYMBOL_MAX_POSITIVE_PHASE);
                 mBuffer[x] = Math.max(mBuffer[x], SOFT_SYMBOL_MAX_NEGATIVE_PHASE);
             }
+        }
+
+        /**
+         * LSM modulation varies too much ... don't do the noisy check on it.
+         * @param offset into the sample buffer to the last symbol.
+         * @return false always
+         */
+        @Override
+        public boolean isNoisy(double offset)
+        {
+            return false;
+        }
+
+        /**
+         * Calculates the sync correlation score at the specified offset and samples per symbol interval.
+         *
+         * Note: for LSM we also use the intra-symbol zero crossing points as inputs to the scoring mechanism due to
+         * the weird waveform variations that can cause the optimizer to align to the symbol transition instead of the
+         * symbol itself, causing the equalizer to skew too far.
+         * @param offset to the final symbol in the soft symbol buffer
+         * @param samplesPerSymbol spacing to test for.
+         * @return correlation score.
+         */
+        public float score(double offset, double samplesPerSymbol)
+        {
+            double samplesPerHalfSymbol = samplesPerSymbol / 2.0;
+            int maxPointer = mBuffer.length - 1;
+            float softSymbol;
+
+            double pointer = offset - (samplesPerSymbol * 23.0);
+            int bufferPointer = (int)Math.floor(pointer);
+            double fractional = pointer - bufferPointer;
+            double halfPointer, halfFractional;
+            int halfBufferPointer;
+
+            float score = 0;
+
+            for(int x = 0; x < 24; x++)
+            {
+                if(bufferPointer < maxPointer)
+                {
+                    softSymbol = LinearInterpolator.calculate(mBuffer[bufferPointer], mBuffer[bufferPointer + 1], fractional);
+                }
+                else
+                {
+                    softSymbol = 0.0f;
+                }
+
+                score += softSymbol * SYNC_PATTERN_SYMBOLS[x];
+
+                //Include the zero crossings of the sync pattern in the score
+                if(x == 4 || x == 5 || x == 7 || x == 9 || x == 11 || x == 15 || x == 16 || x == 17 || x == 18)
+                {
+                    halfPointer = pointer + samplesPerHalfSymbol;
+                    halfBufferPointer = (int)Math.floor(halfPointer);
+                    halfFractional = halfPointer - halfBufferPointer;
+                    softSymbol = LinearInterpolator.calculate(mBuffer[halfBufferPointer], mBuffer[halfBufferPointer + 1], halfFractional);
+                    //Subtract this soft symbol value from the score, since it should optimally be zero.
+                    score -= Math.abs(softSymbol);
+                }
+
+                pointer += samplesPerSymbol;
+                bufferPointer = (int)Math.floor(pointer);
+                fractional = pointer - bufferPointer;
+            }
+
+            return score;
         }
     }
 }

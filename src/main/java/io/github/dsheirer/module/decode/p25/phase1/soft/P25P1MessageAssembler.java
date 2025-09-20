@@ -79,15 +79,23 @@ public class P25P1MessageAssembler implements Listener<Dibit>
     }
 
     /**
-     * Reconfigure this assembler to continue assembling subsequent message blocks.  For example, after receiving
-     * PDU block 1, reconfigure to assemble PDU block 2, etc.
+     * Reconfigure this assembler to continue assembling subsequent message blocks. The assembling message size is
+     * extended to the expected message length of the new DUID.
+     *
      * @param duid for the subsequent message block to assemble.
-     * @param messageLength to assemble
      */
-    public void reconfigure(P25P1DataUnitID duid, int messageLength)
+    public void reconfigure(P25P1DataUnitID duid)
     {
         mDataUnitID = duid;
-        mMessage = new CorrectedBinaryMessage(messageLength);
+
+        if(mMessage != null)
+        {
+            mMessage.setSize(duid.getMessageLength());
+        }
+        else
+        {
+            mMessage = new CorrectedBinaryMessage(duid.getMessageLength());
+        }
     }
 
     /**
