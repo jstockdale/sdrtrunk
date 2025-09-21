@@ -149,6 +149,7 @@ public class P25P1SoftSymbolProcessor
                     mDebugSymbolCount++;
 
                     softSymbol = LinearInterpolator.calculate(mBuffer[mBufferPointer], mBuffer[mBufferPointer + 1], mSamplePoint);
+                    softSymbol = (softSymbol + mEqualizer.mBalance) * mEqualizer.mGain;
                     delayedSymbol = mSymbolDelayLine.insert(toSymbol(softSymbol));
                     mMessageFramer.receive(delayedSymbol);
                     mDibitAssembler.receive(delayedSymbol);
@@ -173,7 +174,9 @@ public class P25P1SoftSymbolProcessor
                         int lagIntegral1 = (int)Math.floor(lag1);
                         int lagIntegral2 = (int)Math.floor(lag2);
                         float softSymbolLag1 = LinearInterpolator.calculate(mBuffer[lagIntegral1], mBuffer[lagIntegral1 + 1], lag1 - lagIntegral1);
+                        softSymbolLag1 = (softSymbolLag1 + mEqualizer.mBalance) * mEqualizer.mGain;
                         float softSymbolLag2 = LinearInterpolator.calculate(mBuffer[lagIntegral2], mBuffer[lagIntegral2 + 1], lag2 - lagIntegral2);
+                        softSymbolLag2 = (softSymbolLag2 + mEqualizer.mBalance) * mEqualizer.mGain;
                         float scoreLag1 = mSyncDetectorLag1.process(softSymbolLag1);
                         float scoreLag2 = mSyncDetectorLag2.process(softSymbolLag2);
 
@@ -276,19 +279,6 @@ public class P25P1SoftSymbolProcessor
         }
 
         mEqualizer.apply(correction);
-    }
-
-    /**
-     * Calculate the maximum delay soft symbol to feed the message framer and dibit assembler.
-     * @return soft symbol.
-     */
-    private float getProjectedSoftSymbol()
-    {
-        //Calculate the framer symbol 33 dibits ahead of the sync pointer that represents the NID symbol
-        double offset = mBufferPointer + mSamplePoint + mSyncOffset;
-        int integral = (int)Math.floor(offset);
-        offset -= integral;
-        return LinearInterpolator.calculate(mBuffer[integral], mBuffer[integral + 1], offset);
     }
 
     /**
@@ -397,6 +387,11 @@ public class P25P1SoftSymbolProcessor
         float[] symbols = new float[24];
         float[] samples = Arrays.copyOfRange(mBuffer, start, end);
 
+        for(int i = 0; i < samples.length; i++)
+        {
+            samples[i] = (samples[i] + mEqualizer.mBalance) * mEqualizer.mGain;
+        }
+
         float[] intervals = new float[24];
 
         int adjust = mBufferPointer - length + offset;
@@ -409,6 +404,8 @@ public class P25P1SoftSymbolProcessor
         for(int x = 0; x < 24; x++)
         {
             symbols[x] = LinearInterpolator.calculate(mBuffer[symbolIntegral], mBuffer[symbolIntegral + 1], mu);
+            symbols[x] = (symbols[x] + mEqualizer.mBalance) * mEqualizer.mGain;
+
             symbolPointer += mObservedSamplesPerSymbol;
             symbolIntegral = (int)Math.floor(symbolPointer);
             mu = symbolPointer - symbolIntegral;
@@ -500,8 +497,7 @@ public class P25P1SoftSymbolProcessor
             integral = (int) Math.floor(pointer);
             fractional = pointer - integral;
             softSymbol = LinearInterpolator.calculate(mBuffer[integral], mBuffer[integral + 1], fractional);
-
-//            softSymbol = (softSymbol + correction.getBalance()) * correction.getGain();
+            softSymbol = (softSymbol + mEqualizer.mBalance) * mEqualizer.mGain;
             symbol = toSymbol(softSymbol);
             resampledNIDSymbols[x] = symbol;
 
@@ -829,17 +825,17 @@ public class P25P1SoftSymbolProcessor
             mGain = Math.min(mGain, EQUALIZER_MAXIMUM_GAIN);
             mGain = Math.max(mGain, 1.0f);
 
-            if(!mInitialized)
-            {
-                System.out.println("Correcting buffer samples to initialize the equalizer");
-                //Apply the initial gain settings to the remaining buffer samples to affect subsequent sampling
-                for(int x = 0; x < mBuffer.length; x++)
-                {
-                    mBuffer[x] = (mBuffer[x] + mBalance) * mGain;
-                }
-
+//            if(!mInitialized)
+//            {
+//                System.out.println("Correcting buffer samples to initialize the equalizer");
+//                //Apply the initial gain settings to the remaining buffer samples to affect subsequent sampling
+//                for(int x = 0; x < mBuffer.length; x++)
+//                {
+//                    mBuffer[x] = (mBuffer[x] + mBalance) * mGain;
+//                }
+//
                 mInitialized = true;
-            }
+//            }
         }
 
         /**
@@ -856,6 +852,8 @@ public class P25P1SoftSymbolProcessor
             float symbol = SYNC_PATTERN_SYMBOLS[23];
             float resampledSoftSymbol = LinearInterpolator.calculate(mBuffer[resampleStartIntegral],
                     mBuffer[resampleStartIntegral + 1], resampleStart - resampleStartIntegral);
+            resampledSoftSymbol = (resampledSoftSymbol + mEqualizer.mBalance) * mEqualizer.mGain;
+
             float balancePlus3Symbols = resampledSoftSymbol - symbol;
             float balanceMinus3Symbols = 0;
             float gainAccumulator = Math.abs(symbol) - Math.abs(resampledSoftSymbol);
@@ -871,6 +869,7 @@ public class P25P1SoftSymbolProcessor
                     symbol = SYNC_PATTERN_SYMBOLS[x];
                     resampledSoftSymbol = LinearInterpolator.calculate(mBuffer[resampleStartIntegral],
                             mBuffer[resampleStartIntegral + 1], resampleStart - resampleStartIntegral);
+                    resampledSoftSymbol = (resampledSoftSymbol + mEqualizer.mBalance) * mEqualizer.mGain;
 
                     Dibit resampledDibit = toSymbol(resampledSoftSymbol);
                     bitErrorCount += SYNC_PATTERN_DIBITS[x].getBitErrorFrom(resampledDibit);
@@ -943,15 +942,15 @@ public class P25P1SoftSymbolProcessor
                     mBuffer[x] -= TWO_PI;
                 }
 
-                //Apply equalizer adjustments
-                mBuffer[x] += mBalance;
-                mBuffer[x] *= mGain;
-
-                //Allow the equalized buffer samples to exceed PI (3.14) by a small factor (3.5) to ensure the optimize
-                // and equalizer update functions work correctly.  The toSymbol() method will map any symbols that
-                // exceed +/- PI into the correct quadrant.
-                mBuffer[x] = Math.min(mBuffer[x], SOFT_SYMBOL_MAX_POSITIVE_PHASE);
-                mBuffer[x] = Math.max(mBuffer[x], SOFT_SYMBOL_MAX_NEGATIVE_PHASE);
+//                //Apply equalizer adjustments
+//                mBuffer[x] += mBalance;
+//                mBuffer[x] *= mGain;
+//
+//                //Allow the equalized buffer samples to exceed PI (3.14) by a small factor (3.5) to ensure the optimize
+//                // and equalizer update functions work correctly.  The toSymbol() method will map any symbols that
+//                // exceed +/- PI into the correct quadrant.
+//                mBuffer[x] = Math.min(mBuffer[x], SOFT_SYMBOL_MAX_POSITIVE_PHASE);
+//                mBuffer[x] = Math.max(mBuffer[x], SOFT_SYMBOL_MAX_NEGATIVE_PHASE);
             }
         }
 
@@ -977,6 +976,7 @@ public class P25P1SoftSymbolProcessor
                 if(bufferPointer < maxPointer)
                 {
                     softSymbol = LinearInterpolator.calculate(mBuffer[bufferPointer], mBuffer[bufferPointer + 1], fractional);
+                    softSymbol = (softSymbol + mEqualizer.mBalance) * mEqualizer.mGain;
                 }
                 else
                 {
@@ -1001,18 +1001,18 @@ public class P25P1SoftSymbolProcessor
         @Override
         public void process(int copyLength)
         {
-            for(int x = mBuffer.length - copyLength; x < mBuffer.length; x++)
-            {
-                //Apply equalizer adjustments
-                mBuffer[x] += mBalance;
-                mBuffer[x] *= mGain;
-
-                //Allow the equalized buffer samples to exceed PI (3.14) by a small factor (3.5) to ensure the optimize
-                // and equalizer update functions work correctly.  The toSymbol() method will map any symbols that
-                // exceed +/- PI into the correct quadrant.
-                mBuffer[x] = Math.min(mBuffer[x], SOFT_SYMBOL_MAX_POSITIVE_PHASE);
-                mBuffer[x] = Math.max(mBuffer[x], SOFT_SYMBOL_MAX_NEGATIVE_PHASE);
-            }
+//            for(int x = mBuffer.length - copyLength; x < mBuffer.length; x++)
+//            {
+//                //Apply equalizer adjustments
+//                mBuffer[x] += mBalance;
+//                mBuffer[x] *= mGain;
+//
+//                //Allow the equalized buffer samples to exceed PI (3.14) by a small factor (3.5) to ensure the optimize
+//                // and equalizer update functions work correctly.  The toSymbol() method will map any symbols that
+//                // exceed +/- PI into the correct quadrant.
+//                mBuffer[x] = Math.min(mBuffer[x], SOFT_SYMBOL_MAX_POSITIVE_PHASE);
+//                mBuffer[x] = Math.max(mBuffer[x], SOFT_SYMBOL_MAX_NEGATIVE_PHASE);
+//            }
         }
 
         /**
@@ -1055,6 +1055,7 @@ public class P25P1SoftSymbolProcessor
                 if(bufferPointer < maxPointer)
                 {
                     softSymbol = LinearInterpolator.calculate(mBuffer[bufferPointer], mBuffer[bufferPointer + 1], fractional);
+                    softSymbol = (softSymbol + mEqualizer.mBalance) * mEqualizer.mGain;
                 }
                 else
                 {

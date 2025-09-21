@@ -280,11 +280,11 @@ public class P25P1Decoder extends Decoder implements IByteBufferProvider, ICompl
 //        String file = directory + "P25-S1-Conventional-repeater-20241115_212221_469325000_QPS_Digital_Kynoch_Kynoch_Digital_59_baseband.wav";
 //        config.setModulation(Modulation.C4FM);
 
-        String file = directory + "P25-S2-LSM-20241225_040119_460500000_CNYICC_Onondaga_Onondaga_CC_0_baseband.wav";
-        config.setModulation(Modulation.CQPSK);
+//        String file = directory + "P25-S2-LSM-20241225_040119_460500000_CNYICC_Onondaga_Onondaga_CC_0_baseband.wav";
+//        config.setModulation(Modulation.CQPSK);
 
-//        String file = directory + "P25-S3-C4FM-20241225_040459_152517500_NYSEG_Onondaga_Control_30_baseband.wav";
-//        config.setModulation(Modulation.C4FM);
+        String file = directory + "P25-S3-C4FM-20241225_040459_152517500_NYSEG_Onondaga_Control_30_baseband.wav";
+        config.setModulation(Modulation.C4FM);
 
 //        String file = directory + "P25-S4-LSM-TCH-Data-20250105_141051_453587500_CNYICC_Onondaga_T-Onondaga_CC_38_baseband.wav";
 //        config.setModulation(Modulation.CQPSK);
