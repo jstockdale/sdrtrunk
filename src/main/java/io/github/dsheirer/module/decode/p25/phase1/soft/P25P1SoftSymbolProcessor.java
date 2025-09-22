@@ -1071,8 +1071,8 @@ public class P25P1SoftSymbolProcessor
                     halfBufferPointer = (int)Math.floor(halfPointer);
                     halfFractional = halfPointer - halfBufferPointer;
                     softSymbol = LinearInterpolator.calculate(mBuffer[halfBufferPointer], mBuffer[halfBufferPointer + 1], halfFractional);
-                    //Subtract this soft symbol value from the score, since it should optimally be zero.
-                    score -= Math.abs(softSymbol);
+                    //Assess a 2x penalty for this soft symbol value, subtracting from the score, since it should optimally be zero.
+                    score -= 2.0f * Math.abs(softSymbol);
                 }
 
                 pointer += samplesPerSymbol;

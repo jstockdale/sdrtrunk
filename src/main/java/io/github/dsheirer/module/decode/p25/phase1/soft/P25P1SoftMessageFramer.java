@@ -190,9 +190,6 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
 
     private void dispatchTDULC()
     {
-        //      TODO: dibit accounting ..
-        //      adjustDibitCounterFromMessageAssembler();
-
         CorrectedBinaryMessage cbm = mMessageAssembler.getMessage();
         P25P1Message message = P25MessageFactory.create(mMessageAssembler.getDataUnitID(), mMessageAssembler.getNAC(),
                 getTimestamp(), cbm);
@@ -207,6 +204,7 @@ public class P25P1SoftMessageFramer implements Listener<Dibit>
             mMessageListener.receive(slm);
         }
 
+        adjustDibitCounterFromMessageAssembler();
         mMessageAssembler = null;
     }
 

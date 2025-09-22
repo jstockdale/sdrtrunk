@@ -31,7 +31,7 @@ public enum P25P1DataUnitID
     TRUNKING_SIGNALING_BLOCK_1(7, 238, 72, false, "TSBK1"),
     LOGICAL_LINK_DATA_UNIT_2(10, 1568, 864, false, "LDU2 "),
     PACKET_DATA_UNIT(12, 238, 180, false, "PDU"),
-    TERMINATOR_DATA_UNIT_LINK_CONTROL(15, 288, 216, true, "TDULC"),
+    TERMINATOR_DATA_UNIT_LINK_CONTROL(15, 308, 216, true, "TDULC"),
 
     //Set to length of LDU plus sync/nid so that next sync detect can force it to a best guess
     PLACEHOLDER(-1, 1800, 72, false, "PLACEHOLDER"), //Originally: 1686
